@@ -1,0 +1,23 @@
+{
+  "config": {
+    "output_curve": "baseline\\baseline_loss_curve.csv",
+    "output_summary": "baseline\\baseline_config.json",
+    "seed": 7,
+    "steps": 100,
+    "eval_every": 10,
+    "learning_rate": 0.003,
+    "d_model": 32,
+    "num_heads": 4,
+    "mlp_hidden_dim": 64,
+    "num_layers": 6,
+    "device": "cpu"
+  },
+  "dataset": "shakespeare_public_domain_excerpt_v1",
+  "vocab_size": 37,
+  "sequence_length": 64,
+  "batch_size": 8,
+  "initial_eval_loss": 3.8332548574967817,
+  "final_train_loss": 1.9438023567199707,
+  "final_eval_loss": 2.063348965211348,
+  "curve_path": "baseline\\baseline_loss_curve.csv"
+}

@@ -81,32 +81,34 @@ class WindowCoordinator:
         ordered_nodes = self._ordered_nodes()
         loss_before = self.evaluate_next_token_loss(input_ids)
 
-        for node in ordered_nodes:
-            node.set_training_mode(True)
-            node.zero_grad()
+        try:
+            for node in ordered_nodes:
+                node.set_training_mode(True)
+                node.zero_grad()
 
-        ordered_nodes, logits, payloads = await self._execute_window(
-            model_inputs,
-            version=version,
-            microbatches=microbatches,
-            retain_graph_tensor=True,
-        )
-        loss = next_token_loss(logits, targets)
-        loss.backward()
+            ordered_nodes, logits, payloads = await self._execute_window(
+                model_inputs,
+                version=version,
+                microbatches=microbatches,
+                retain_graph_tensor=True,
+            )
+            loss = next_token_loss(logits, targets)
+            loss.backward()
 
-        for node in ordered_nodes:
-            node.optimizer_step()
-            node.save_checkpoint(version + 1)
-            node.handle_lifecycle_events(version=version + 1)
-            node.set_training_mode(False)
+            for node in ordered_nodes:
+                node.optimizer_step()
+                node.save_checkpoint(version + 1)
+                node.handle_lifecycle_events(version=version + 1)
 
-        loss_after = self.evaluate_next_token_loss(input_ids)
-        return TrainWindowResult(
-            version=version,
-            loss_before=float(loss_before),
-            loss_after=float(loss_after),
-            boundary_payloads=payloads,
-        )
+            loss_after = self.evaluate_next_token_loss(input_ids)
+            return TrainWindowResult(
+                version=version,
+                loss_before=float(loss_before),
+                loss_after=float(loss_after),
+                boundary_payloads=payloads,
+            )
+        finally:
+            self._reset_training_state(ordered_nodes)
 
     def evaluate_next_token_loss(self, input_ids: torch.Tensor) -> float:
         model_inputs, targets = split_next_token_batch(input_ids)
@@ -197,6 +199,11 @@ class WindowCoordinator:
         if logits is None:
             raise RuntimeError("direct forward did not produce logits")
         return logits
+
+    def _reset_training_state(self, ordered_nodes: list[Node]) -> None:
+        for node in ordered_nodes:
+            node.zero_grad()
+            node.set_training_mode(False)
 
     async def _deliver_boundary(
         self,

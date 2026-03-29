@@ -20,7 +20,9 @@ The current implementation is intentionally narrower than the full design docume
 - shard equivalence proven
 - single-window runtime path verified
 - test suite passing
-- dataset and baseline still not locked
+- eval artifact locked
+- centralized baseline runner implemented
+- first frozen baseline run completed
 
 ## Current Test Command
 
@@ -33,7 +35,7 @@ python -m pytest tests -q -p no:cacheprovider
 ```text
 baseline/     centralized reference training scaffold
 daemon/       runtime coordination and loop scaffolding
-eval/         frozen eval artifact placeholders
+eval/         frozen eval artifact
 experiments/  run outputs
 sim/          network emulation helpers
 tests/        protocol and correctness tests
@@ -48,9 +50,10 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Implement zero-delay training for the toy sharded model:
+Use the frozen centralized baseline as the reference for distributed comparisons:
 
-- next-token loss
-- backward pass
-- optimizer step
-- first checkpoint write
+- baseline step budget: `100`
+- eval cadence: every `10` steps
+- reference artifacts:
+  - `baseline/baseline_loss_curve.csv`
+  - `baseline/baseline_config.json`

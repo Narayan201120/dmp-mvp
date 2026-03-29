@@ -1,8 +1,11 @@
 {
-  "dataset": null,
-  "tokenizer": null,
-  "seq_len": null,
-  "batch_size": null,
-  "status": "unlocked"
+  "dataset": "shakespeare_public_domain_excerpt_v1",
+  "source_family": "Shakespeare",
+  "tokenizer": "character",
+  "seq_len": 64,
+  "batch_size": 8,
+  "hash_algorithm": "sha256",
+  "status": "locked",
+  "frozen_on": "2026-03-29",
+  "notes": "Phase 0 canonical eval anchor for initial bring-up and baseline comparison."
 }
-
