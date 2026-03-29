@@ -1,0 +1,8 @@
+*.txt
+*.docx
+PHASE1_EXECUTION_PLAN.md
+PROGRESS.md
+
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
