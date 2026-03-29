@@ -4,6 +4,7 @@ from collections import OrderedDict
 from typing import Dict, Mapping
 
 import numpy as np
+from torch import nn
 
 
 StateDict = Mapping[str, np.ndarray]
@@ -11,6 +12,15 @@ StateDict = Mapping[str, np.ndarray]
 
 def clone_state(state: StateDict) -> dict[str, np.ndarray]:
     return {key: np.asarray(value, dtype=np.float32).copy() for key, value in state.items()}
+
+
+def module_state_to_numpy(module: nn.Module) -> dict[str, np.ndarray]:
+    return {
+        key: value.detach().to(device="cpu", dtype=value.dtype if value.is_floating_point() else None).numpy().copy()
+        if value.is_floating_point()
+        else value.detach().cpu().numpy().copy()
+        for key, value in module.state_dict().items()
+    }
 
 
 def subtract_state(lhs: StateDict, rhs: StateDict) -> dict[str, np.ndarray]:
@@ -96,4 +106,3 @@ class SnapshotStore:
 def _ensure_same_keys(lhs: Mapping[str, np.ndarray], rhs: Mapping[str, np.ndarray]) -> None:
     if set(lhs) != set(rhs):
         raise ValueError("state dictionaries must contain the same keys")
-

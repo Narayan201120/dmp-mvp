@@ -26,9 +26,11 @@ def sample_delivery_delay(config: NetworkConfig, rng: random.Random | None = Non
     if generator.random() < config.packet_loss:
         return None
     jitter = generator.randint(-config.jitter_ms, config.jitter_ms) if config.jitter_ms else 0
-    return max(0, config.base_latency_ms + jitter)
+    delay = max(0, config.base_latency_ms + jitter)
+    if config.reorder_chance and generator.random() < config.reorder_chance:
+        delay += max(1, config.base_latency_ms + config.jitter_ms + 1)
+    return delay
 
 
 def wrap_message(payload: Any, *, delay_ms: int | None) -> dict[str, Any]:
     return {"payload": payload, "delay_ms": delay_ms}
-

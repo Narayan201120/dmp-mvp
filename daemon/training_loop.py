@@ -7,8 +7,14 @@ import torch
 
 from daemon.messaging import MessageBus
 from daemon.state import NodeState
-from training.protocol import WindowSession, materialize_tensor_boundary_state, payload_as_tensor
+from training.protocol import BoundaryPayload, WindowSession, materialize_tensor_boundary_state
 from training.shard import TransformerShard
+
+
+@dataclass(slots=True)
+class WindowForwardResult:
+    tensor: torch.Tensor
+    boundary_payload: BoundaryPayload | None = None
 
 
 @dataclass(slots=True)
@@ -31,7 +37,8 @@ class TrainingLoop:
         *,
         input_ids: torch.Tensor | None = None,
         hidden_states: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        retain_graph_tensor: bool = False,
+    ) -> WindowForwardResult:
         if self.shard is None:
             raise RuntimeError("training loop cannot execute without an attached shard")
 
@@ -51,7 +58,7 @@ class TrainingLoop:
         )
 
         if self.shard.is_last_shard:
-            return output
+            return WindowForwardResult(tensor=output)
 
         target_shard = self.state.shard_id + 1
         payload = materialize_tensor_boundary_state(
@@ -60,14 +67,4 @@ class TrainingLoop:
             target_shard=target_shard,
             tensor=output,
         )
-        session.exchange_boundary_state(payload)
-        await self.bus.publish(
-            "training.boundaries",
-            {
-                "version": payload.version,
-                "source_shard": payload.source_shard,
-                "target_shard": payload.target_shard,
-                "shape": tuple(payload.tensor.shape),
-            },
-        )
-        return payload_as_tensor(payload, device=output.device, dtype=output.dtype)
+        return WindowForwardResult(tensor=output if retain_graph_tensor else output.detach(), boundary_payload=payload)
