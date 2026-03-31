@@ -19,6 +19,8 @@ class Node:
     bus: MessageBus
     shard: TransformerShard | None = None
     learning_rate: float = 1e-2
+    optimizer_name: str = "adam"
+    weight_decay: float = 0.0
     snapshot_depth: int = 10
     training_loop: TrainingLoop = field(init=False)
     eval_loop: EvalLoop = field(init=False)
@@ -31,7 +33,7 @@ class Node:
         self.eval_loop = EvalLoop(bus=self.bus, state=self.state)
         self.adaptation_loop = AdaptationLoop()
         if self.shard is not None:
-            self.optimizer = optim.Adam(self.shard.parameters(), lr=self.learning_rate)
+            self.optimizer = self._build_optimizer()
             self.snapshot_store = SnapshotStore(max_depth=self.snapshot_depth)
             self.save_checkpoint(self.state.version)
 
@@ -66,3 +68,14 @@ class Node:
             raise RuntimeError("node checkpointing requires an attached shard")
         self.snapshot_store.save(version, module_state_to_numpy(self.shard))
         self.state.last_checkpoint_version = version
+
+    def _build_optimizer(self) -> optim.Optimizer:
+        if self.shard is None:
+            raise RuntimeError("node optimizer requires an attached shard")
+
+        optimizer_name = self.optimizer_name.lower()
+        if optimizer_name == "adam":
+            return optim.Adam(self.shard.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        if optimizer_name == "adamw":
+            return optim.AdamW(self.shard.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        raise ValueError(f"unsupported optimizer_name: {self.optimizer_name}")

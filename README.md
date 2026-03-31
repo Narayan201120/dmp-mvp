@@ -19,10 +19,13 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing
+- test suite passing (`21 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
+- distributed comparison runner implemented
+- first zero-delay distributed comparison run completed
+- zero-delay distributed final eval loss matches the frozen baseline (`2.063348965211348`)
 
 ## Current Test Command
 
@@ -50,10 +53,11 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the frozen centralized baseline as the reference for distributed comparisons:
+Use the completed zero-delay distributed comparison as the control for delayed-network experiments:
 
-- baseline step budget: `100`
-- eval cadence: every `10` steps
-- reference artifacts:
+- centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
   - `baseline/baseline_config.json`
+- zero-delay distributed control artifacts:
+  - `experiments/distributed_loss_curve.csv`
+  - `experiments/distributed_run_summary.json`
