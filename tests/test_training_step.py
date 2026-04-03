@@ -17,6 +17,11 @@ def _build_coordinator(
     network_config: NetworkConfig | None = None,
     max_staleness: int = 0,
     window_budget_ms: int = 1,
+    staleness_decay_rate: float = 0.0,
+    staleness_floor: float = 1.0,
+    compression_topk_ratio: float = 1.0,
+    compression_num_bits: int = 16,
+    compression_error_feedback: bool = False,
 ) -> tuple[WindowCoordinator, MessageBus]:
     config = ToyTransformerConfig(
         vocab_size=32,
@@ -45,6 +50,11 @@ def _build_coordinator(
             network_config=network_config or NetworkConfig(),
             max_staleness=max_staleness,
             window_budget_ms=window_budget_ms,
+            staleness_decay_rate=staleness_decay_rate,
+            staleness_floor=staleness_floor,
+            compression_topk_ratio=compression_topk_ratio,
+            compression_num_bits=compression_num_bits,
+            compression_error_feedback=compression_error_feedback,
         ),
         bus,
     )
@@ -107,6 +117,66 @@ def test_delayed_training_within_staleness_budget_still_learns() -> None:
 
     assert all(event["status"] == "delivered" for event in boundary_events)
     assert all(event["delay_ms"] == 1 for event in boundary_events)
+
+
+def test_staleness_weighting_changes_the_training_trajectory() -> None:
+    baseline_coordinator, _ = _build_coordinator()
+    weighted_coordinator, weighted_bus = _build_coordinator(
+        network_config=NetworkConfig(base_latency_ms=1, jitter_ms=0, packet_loss=0.0, reorder_chance=0.0),
+        max_staleness=2,
+        window_budget_ms=1,
+        staleness_decay_rate=1.0,
+        staleness_floor=0.25,
+    )
+    batch = _training_batch()
+
+    baseline_latest = None
+    weighted_latest = None
+    for version in range(3):
+        baseline_latest = asyncio.run(baseline_coordinator.train_window(batch, version=version, microbatches=1))
+        weighted_latest = asyncio.run(weighted_coordinator.train_window(batch, version=version, microbatches=1))
+
+    assert baseline_latest is not None
+    assert weighted_latest is not None
+    assert weighted_latest.loss_after < weighted_latest.loss_before
+    assert weighted_latest.loss_after != pytest.approx(baseline_latest.loss_after)
+
+    boundary_events = []
+    queue = weighted_bus.queue("training.boundaries")
+    while not queue.empty():
+        boundary_events.append(queue.get_nowait())
+
+    multipliers = [event["staleness_multiplier"] for event in boundary_events]
+    assert multipliers
+    assert all(multiplier < 1.0 for multiplier in multipliers)
+
+
+def test_compressed_boundary_training_still_learns_and_reports_metadata() -> None:
+    coordinator, bus = _build_coordinator(
+        compression_topk_ratio=0.25,
+        compression_num_bits=8,
+        compression_error_feedback=True,
+    )
+    batch = _training_batch()
+
+    initial_loss = coordinator.evaluate_next_token_loss(batch)
+    latest = None
+    for version in range(3):
+        latest = asyncio.run(coordinator.train_window(batch, version=version, microbatches=1))
+
+    assert latest is not None
+    assert latest.loss_after < latest.loss_before
+    assert latest.loss_after < initial_loss
+
+    boundary_events = []
+    queue = bus.queue("training.boundaries")
+    while not queue.empty():
+        boundary_events.append(queue.get_nowait())
+
+    assert boundary_events
+    assert all(event["compression_applied"] for event in boundary_events)
+    assert all(event["compression_num_bits"] == 8 for event in boundary_events)
+    assert all(event["compressed_values"] < 3 * 7 * 16 for event in boundary_events)
 
 
 def test_packet_loss_fails_fast_without_advancing_state() -> None:

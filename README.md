@@ -19,13 +19,18 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`21 passed`)
+- test suite passing (`23 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
 - distributed comparison runner implemented
 - first zero-delay distributed comparison run completed
 - zero-delay distributed final eval loss matches the frozen baseline (`2.063348965211348`)
+- delayed-network comparison sweeps completed for latency, jitter, and reordering within the staleness budget
+- all successful delayed sweeps remain eval-curve identical to the zero-delay control and frozen baseline
+- the `1 ms` / `max_staleness=0` edge still fails fast with a stale-boundary error as designed
+- staleness-weighted delayed sweeps now produce measurable eval-loss deltas against baseline
+- end-to-end compression sweeps now produce measurable eval-loss deltas against baseline and record boundary density stats
 
 ## Current Test Command
 
@@ -53,7 +58,7 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the completed zero-delay distributed comparison as the control for delayed-network experiments:
+Use the completed staleness-weighted and compression sweeps as the current control envelope:
 
 - centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
@@ -61,3 +66,15 @@ Use the completed zero-delay distributed comparison as the control for delayed-n
 - zero-delay distributed control artifacts:
   - `experiments/distributed_loss_curve.csv`
   - `experiments/distributed_run_summary.json`
+- delayed comparison artifacts:
+  - `experiments/distributed_delay_1ms_summary.json`
+  - `experiments/distributed_delay_2ms_summary.json`
+  - `experiments/distributed_delay_jitter_reorder_summary.json`
+- staleness-weighted artifacts:
+  - `experiments/distributed_decay_1ms_summary.json`
+  - `experiments/distributed_decay_2ms_summary.json`
+  - `experiments/distributed_decay_jitter_reorder_summary.json`
+- compression artifacts:
+  - `experiments/distributed_compression_top25_8bit_summary.json`
+  - `experiments/distributed_compression_top25_8bit_ef_summary.json`
+  - `experiments/distributed_compression_top10_4bit_ef_summary.json`

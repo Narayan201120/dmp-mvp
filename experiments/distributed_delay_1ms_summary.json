@@ -1,0 +1,58 @@
+{
+  "config": {
+    "output_curve": "experiments\\distributed_delay_1ms_curve.csv",
+    "output_summary": "experiments\\distributed_delay_1ms_summary.json",
+    "baseline_curve": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_loss_curve.csv",
+    "baseline_summary": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_config.json",
+    "seed": 7,
+    "steps": 100,
+    "eval_every": 10,
+    "learning_rate": 0.003,
+    "d_model": 32,
+    "num_heads": 4,
+    "mlp_hidden_dim": 64,
+    "num_layers": 6,
+    "device": "cpu",
+    "num_shards": 3,
+    "optimizer_name": "adamw",
+    "weight_decay": 0.01,
+    "snapshot_depth": 32,
+    "max_staleness": 2,
+    "window_budget_ms": 1,
+    "base_latency_ms": 1,
+    "jitter_ms": 0,
+    "packet_loss": 0.0,
+    "reorder_chance": 0.0
+  },
+  "dataset": "shakespeare_public_domain_excerpt_v1",
+  "vocab_size": 37,
+  "sequence_length": 64,
+  "batch_size": 8,
+  "initial_eval_loss": 3.8332548574967817,
+  "final_train_loss": 1.9438024759292603,
+  "final_eval_loss": 2.063348965211348,
+  "final_version": 100,
+  "curve_path": "experiments\\distributed_delay_1ms_curve.csv",
+  "boundary_events_recorded": 200,
+  "boundary_delivery": {
+    "events_recorded": 200,
+    "status_counts": {
+      "delivered": 200
+    },
+    "delay_ms": {
+      "min": 1,
+      "max": 1,
+      "avg": 1.0
+    },
+    "max_simulated_current_version": 100
+  },
+  "baseline_reference": {
+    "curve_path": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_loss_curve.csv",
+    "summary_path": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_config.json",
+    "final_eval_loss": 2.063348965211348,
+    "final_eval_loss_delta": 0.0,
+    "eval_loss_ratio": 1.0,
+    "schedule_matches": true,
+    "config_matches": true
+  }
+}

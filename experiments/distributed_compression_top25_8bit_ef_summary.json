@@ -1,0 +1,74 @@
+{
+  "config": {
+    "output_curve": "experiments\\distributed_compression_top25_8bit_ef_curve.csv",
+    "output_summary": "experiments\\distributed_compression_top25_8bit_ef_summary.json",
+    "baseline_curve": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_loss_curve.csv",
+    "baseline_summary": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_config.json",
+    "seed": 7,
+    "steps": 100,
+    "eval_every": 10,
+    "learning_rate": 0.003,
+    "d_model": 32,
+    "num_heads": 4,
+    "mlp_hidden_dim": 64,
+    "num_layers": 6,
+    "device": "cpu",
+    "num_shards": 3,
+    "optimizer_name": "adamw",
+    "weight_decay": 0.01,
+    "snapshot_depth": 32,
+    "max_staleness": 0,
+    "window_budget_ms": 1,
+    "staleness_decay_rate": 0.0,
+    "staleness_floor": 1.0,
+    "compression_topk_ratio": 0.25,
+    "compression_num_bits": 8,
+    "compression_error_feedback": true,
+    "base_latency_ms": 0,
+    "jitter_ms": 0,
+    "packet_loss": 0.0,
+    "reorder_chance": 0.0
+  },
+  "dataset": "shakespeare_public_domain_excerpt_v1",
+  "vocab_size": 37,
+  "sequence_length": 64,
+  "batch_size": 8,
+  "initial_eval_loss": 3.8332548574967817,
+  "final_train_loss": 2.9938855171203613,
+  "final_eval_loss": 3.0254006385803223,
+  "final_version": 100,
+  "curve_path": "experiments\\distributed_compression_top25_8bit_ef_curve.csv",
+  "boundary_events_recorded": 200,
+  "boundary_delivery": {
+    "events_recorded": 200,
+    "status_counts": {
+      "delivered": 200
+    },
+    "delay_ms": {
+      "min": 0,
+      "max": 0,
+      "avg": 0.0
+    },
+    "max_simulated_current_version": 99,
+    "staleness_multiplier": {
+      "min": 1.0,
+      "max": 1.0,
+      "avg": 1.0
+    },
+    "compression": {
+      "applied_events": 200,
+      "min_values": 4096,
+      "max_values": 4096,
+      "avg_values": 4096.0
+    }
+  },
+  "baseline_reference": {
+    "curve_path": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_loss_curve.csv",
+    "summary_path": "C:\\Users\\naray\\OneDrive\\Desktop\\Projects\\dmp_mvp\\baseline\\baseline_config.json",
+    "final_eval_loss": 2.063348965211348,
+    "final_eval_loss_delta": 0.9620516733689741,
+    "eval_loss_ratio": 1.4662573755527735,
+    "schedule_matches": true,
+    "config_matches": true
+  }
+}

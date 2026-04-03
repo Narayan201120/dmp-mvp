@@ -104,6 +104,17 @@ def test_distributed_runner_writes_baseline_compatible_artifacts() -> None:
         assert summary["curve_path"] == str(output_curve)
         assert summary["final_version"] == 2
         assert summary["boundary_events_recorded"] == 2
+        assert summary["boundary_delivery"]["events_recorded"] == 2
+        assert summary["boundary_delivery"]["status_counts"] == {"delivered": 2}
+        assert summary["boundary_delivery"]["delay_ms"] == {"min": 0, "max": 0, "avg": 0.0}
+        assert summary["boundary_delivery"]["max_simulated_current_version"] == 1
+        assert summary["boundary_delivery"]["staleness_multiplier"] == {"min": 1.0, "max": 1.0, "avg": 1.0}
+        assert summary["boundary_delivery"]["compression"] == {
+            "applied_events": 0,
+            "min_values": 8192,
+            "max_values": 8192,
+            "avg_values": 8192.0,
+        }
         assert summary["baseline_reference"]["config_matches"] is True
         assert summary["baseline_reference"]["schedule_matches"] is True
 
