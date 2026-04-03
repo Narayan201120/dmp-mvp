@@ -176,6 +176,8 @@ def test_compressed_boundary_training_still_learns_and_reports_metadata() -> Non
     assert all(event["compression_applied"] for event in boundary_events)
     assert all(event["compression_num_bits"] == 8 for event in boundary_events)
     assert all(event["compressed_values"] < 3 * 7 * 16 for event in boundary_events)
+    assert all(event["payload_wire_bytes"] < event["dense_payload_wire_bytes"] for event in boundary_events)
+    assert all(event["payload_wire_ratio"] < 1.0 for event in boundary_events)
 
 
 def test_boundary_activation_error_feedback_is_rejected() -> None:

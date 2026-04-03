@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`25 passed`)
+- test suite passing (`26 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -34,6 +34,9 @@ The current implementation is intentionally narrower than the full design docume
 - boundary-activation error feedback is now rejected explicitly; the older EF artifacts are retained only as diagnostic evidence
 - supported non-EF compression tuning shows that keeping more boundary values matters more than raising quantization precision on this toy setup
 - first combined staleness-plus-compression matrix is complete for the supported `top50/6-bit` point
+- `top50/4-bit` versus `top50/6-bit` combined-delay comparison is complete, and the gap stays small once staleness becomes the dominant source of damage
+- exact sparse payload byte reporting is now wired into the experiment summaries
+- current byte-aware recommendation: `top50/4-bit` for better quality per byte, `top50/6-bit` for a slightly safer quality margin under jitter
 
 ## Current Test Command
 
@@ -61,7 +64,7 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the current combined tradeoff artifacts to compare `top50/4-bit` against `top50/6-bit` under delay and to add exact sparse wire-byte reporting:
+Use the current byte-aware tradeoff artifacts to pick the operating point for future sweeps, then retune staleness around that choice:
 
 - centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
@@ -87,6 +90,9 @@ Use the current combined tradeoff artifacts to compare `top50/4-bit` against `to
   - `experiments/distributed_combined_top50_6bit_decay_1ms_summary.json`
   - `experiments/distributed_combined_top50_6bit_decay_2ms_summary.json`
   - `experiments/distributed_combined_top50_6bit_decay_jitter_reorder_summary.json`
+  - `experiments/distributed_combined_top50_4bit_decay_1ms_summary.json`
+  - `experiments/distributed_combined_top50_4bit_decay_2ms_summary.json`
+  - `experiments/distributed_combined_top50_4bit_decay_jitter_reorder_summary.json`
 - diagnostic-only unsupported EF artifacts:
   - `experiments/distributed_compression_top25_8bit_ef_summary.json`
   - `experiments/distributed_compression_top10_4bit_ef_summary.json`

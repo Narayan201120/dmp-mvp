@@ -9,7 +9,12 @@ import torch
 
 from daemon.node import Node
 from sim.network import NetworkConfig, sample_delivery_delay, wrap_message
-from training.compression import compress_boundary_payload, decompress_boundary_payload
+from training.compression import (
+    compress_boundary_payload,
+    compressed_payload_wire_bytes,
+    decompress_boundary_payload,
+    dense_payload_wire_bytes,
+)
 from training.metrics import next_token_loss, split_next_token_batch
 from training.protocol import BoundaryPayload, open_window, payload_as_tensor
 from training.staleness import decay_weight, should_drop
@@ -306,6 +311,7 @@ class WindowCoordinator:
         retain_graph_tensor: bool,
         edge: tuple[int, int],
     ) -> tuple[torch.Tensor, BoundaryPayload, dict[str, object]]:
+        dense_wire_bytes = dense_payload_wire_bytes(payload.tensor)
         if not self._compression_enabled:
             delivered_tensor = source_tensor if retain_graph_tensor else payload_as_tensor(
                 payload,
@@ -318,6 +324,9 @@ class WindowCoordinator:
                 {
                     "compression_applied": False,
                     "compressed_values": int(payload.tensor.size),
+                    "payload_wire_bytes": dense_wire_bytes,
+                    "dense_payload_wire_bytes": dense_wire_bytes,
+                    "payload_wire_ratio": 1.0,
                     "compression_topk_ratio": 1.0,
                     "compression_num_bits": None,
                 },
@@ -330,6 +339,7 @@ class WindowCoordinator:
             error_feedback=None,
         )
         reconstructed = decompress_boundary_payload(compressed)
+        compressed_wire_bytes = compressed_payload_wire_bytes(compressed)
 
         reconstructed_tensor = torch.from_numpy(reconstructed.copy()).to(
             device=source_tensor.device,
@@ -352,6 +362,9 @@ class WindowCoordinator:
             {
                 "compression_applied": True,
                 "compressed_values": int(compressed.indices.size),
+                "payload_wire_bytes": compressed_wire_bytes,
+                "dense_payload_wire_bytes": dense_wire_bytes,
+                "payload_wire_ratio": compressed_wire_bytes / dense_wire_bytes,
                 "compression_topk_ratio": self.compression_topk_ratio,
                 "compression_num_bits": self.compression_num_bits,
             },

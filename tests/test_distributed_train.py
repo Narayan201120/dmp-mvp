@@ -114,6 +114,9 @@ def test_distributed_runner_writes_baseline_compatible_artifacts() -> None:
             "min_values": 8192,
             "max_values": 8192,
             "avg_values": 8192.0,
+            "wire_bytes": {"min": 32768, "max": 32768, "avg": 32768.0},
+            "dense_wire_bytes": {"min": 32768, "max": 32768, "avg": 32768.0},
+            "wire_ratio": {"min": 1.0, "max": 1.0, "avg": 1.0},
         }
         assert summary["baseline_reference"]["config_matches"] is True
         assert summary["baseline_reference"]["schedule_matches"] is True

@@ -218,22 +218,29 @@ def summarize_boundary_events(queue) -> dict[str, object]:
         for count in (event.get("compressed_values") for event in events)
         if count is not None
     ]
+    payload_wire_bytes = [
+        int(byte_count)
+        for byte_count in (event.get("payload_wire_bytes") for event in events)
+        if byte_count is not None
+    ]
+    dense_payload_wire_bytes = [
+        int(byte_count)
+        for byte_count in (event.get("dense_payload_wire_bytes") for event in events)
+        if byte_count is not None
+    ]
+    payload_wire_ratios = [
+        float(ratio)
+        for ratio in (event.get("payload_wire_ratio") for event in events)
+        if ratio is not None
+    ]
     compression_applied_count = sum(1 for event in events if bool(event.get("compression_applied")))
 
     return {
         "events_recorded": len(events),
         "status_counts": dict(status_counts),
-        "delay_ms": {
-            "min": min(delay_values) if delay_values else None,
-            "max": max(delay_values) if delay_values else None,
-            "avg": (sum(delay_values) / len(delay_values)) if delay_values else None,
-        },
+        "delay_ms": _numeric_summary(delay_values),
         "max_simulated_current_version": max(simulated_versions) if simulated_versions else None,
-        "staleness_multiplier": {
-            "min": min(staleness_multipliers) if staleness_multipliers else None,
-            "max": max(staleness_multipliers) if staleness_multipliers else None,
-            "avg": (sum(staleness_multipliers) / len(staleness_multipliers)) if staleness_multipliers else None,
-        },
+        "staleness_multiplier": _numeric_summary(staleness_multipliers),
         "compression": {
             "applied_events": compression_applied_count,
             "min_values": min(compressed_value_counts) if compressed_value_counts else None,
@@ -241,7 +248,20 @@ def summarize_boundary_events(queue) -> dict[str, object]:
             "avg_values": (sum(compressed_value_counts) / len(compressed_value_counts))
             if compressed_value_counts
             else None,
+            "wire_bytes": _numeric_summary(payload_wire_bytes),
+            "dense_wire_bytes": _numeric_summary(dense_payload_wire_bytes),
+            "wire_ratio": _numeric_summary(payload_wire_ratios),
         },
+    }
+
+
+def _numeric_summary(values: list[int] | list[float]) -> dict[str, int | float | None]:
+    if not values:
+        return {"min": None, "max": None, "avg": None}
+    return {
+        "min": min(values),
+        "max": max(values),
+        "avg": sum(values) / len(values),
     }
 
 

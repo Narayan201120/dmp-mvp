@@ -59,7 +59,22 @@
       "applied_events": 200,
       "min_values": 8192,
       "max_values": 8192,
-      "avg_values": 8192.0
+      "avg_values": 8192.0,
+      "wire_bytes": {
+        "min": 20484,
+        "max": 20484,
+        "avg": 20484.0
+      },
+      "dense_wire_bytes": {
+        "min": 65536,
+        "max": 65536,
+        "avg": 65536.0
+      },
+      "wire_ratio": {
+        "min": 0.31256103515625,
+        "max": 0.31256103515625,
+        "avg": 0.31256103515625
+      }
     }
   },
   "baseline_reference": {

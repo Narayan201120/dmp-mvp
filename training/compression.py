@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 
@@ -12,6 +13,25 @@ class CompressedBoundaryPayload:
     quantized_values: np.ndarray
     scale: float
     num_bits: int
+
+
+def dense_payload_wire_bytes(array: np.ndarray) -> int:
+    """Return the raw float32 tensor-body cost in bytes."""
+    return int(np.asarray(array, dtype=np.float32).nbytes)
+
+
+def compressed_payload_wire_bytes(payload: CompressedBoundaryPayload) -> int:
+    """Return the packed sparse tensor-body cost in bytes.
+
+    This excludes the fixed boundary envelope fields because those are constant across
+    dense and compressed delivery paths in the current runtime.
+    """
+    value_count = int(payload.quantized_values.size)
+    return (
+        _index_wire_bytes(payload.shape, value_count)
+        + _packed_quantized_wire_bytes(value_count, payload.num_bits)
+        + np.dtype(np.float32).itemsize
+    )
 
 
 def topk_sparsify(array: np.ndarray, ratio: float) -> tuple[np.ndarray, np.ndarray]:
@@ -93,3 +113,28 @@ def cosine_similarity(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if lhs_norm == 0.0 or rhs_norm == 0.0:
         return 1.0 if lhs_norm == rhs_norm else 0.0
     return float(np.dot(lhs_vec, rhs_vec) / (lhs_norm * rhs_norm))
+
+
+def _index_wire_bytes(shape: tuple[int, ...], value_count: int) -> int:
+    if value_count < 0:
+        raise ValueError("value_count must be non-negative")
+    flat_size = int(np.prod(shape))
+    if flat_size < 1:
+        raise ValueError("payload shape must have at least one element")
+    if flat_size - 1 <= np.iinfo(np.uint8).max:
+        width = 1
+    elif flat_size - 1 <= np.iinfo(np.uint16).max:
+        width = 2
+    elif flat_size - 1 <= np.iinfo(np.uint32).max:
+        width = 4
+    else:
+        width = 8
+    return value_count * width
+
+
+def _packed_quantized_wire_bytes(value_count: int, num_bits: int) -> int:
+    if value_count < 0:
+        raise ValueError("value_count must be non-negative")
+    if not 1 <= num_bits <= 16:
+        raise ValueError("num_bits must be between 1 and 16")
+    return int(math.ceil((value_count * num_bits) / 8))

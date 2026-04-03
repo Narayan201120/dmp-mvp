@@ -151,3 +151,70 @@
 - The effects compound in the expected order: `1 ms` is mildest, jitter/reorder is intermediate, and `2 ms` is the worst combined setting.
 - The supported `top50/6-bit` point remains a good anchor for combined sweeps because its zero-delay cost is small, which makes the added staleness penalty easy to interpret.
 - The summaries still report kept values rather than exact sparse wire bytes, so the current matrix is quality-first rather than a full transport-efficiency comparison.
+
+## 2026-04-03 Combined Precision Comparator
+
+- Compression-only control:
+- Reference artifact: `experiments/distributed_compression_top50_4bit_summary.json`
+- Final eval loss: `2.139144106344743`
+- Final eval loss delta vs baseline: `0.07579514113339503`
+
+- `1 ms` latency with decay plus top-50% / 4-bit compression:
+- Command: `python experiments\distributed_train.py --base-latency-ms 1 --max-staleness 2 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-curve experiments\distributed_combined_top50_4bit_decay_1ms_curve.csv --output-summary experiments\distributed_combined_top50_4bit_decay_1ms_summary.json`
+- Final eval loss: `2.2083787484602495`
+- Final eval loss delta vs baseline: `0.14502978324890137`
+- Incremental delta vs compression-only control: `0.06923464211550634`
+- Boundary delivery: `200 delivered`, staleness multiplier min/max/avg `0.6065306597126334 / 0.6065306597126334 / 0.6065306597126334`, values kept min/max/avg `8192 / 8192 / 8192.0`
+
+- `2 ms` latency with decay plus top-50% / 4-bit compression:
+- Command: `python experiments\distributed_train.py --base-latency-ms 2 --max-staleness 4 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-curve experiments\distributed_combined_top50_4bit_decay_2ms_curve.csv --output-summary experiments\distributed_combined_top50_4bit_decay_2ms_summary.json`
+- Final eval loss: `2.484022682363337`
+- Final eval loss delta vs baseline: `0.42067371715198876`
+- Incremental delta vs compression-only control: `0.34487857601859373`
+- Boundary delivery: `200 delivered`, staleness multiplier min/max/avg `0.36787944117144233 / 0.36787944117144233 / 0.36787944117144233`, values kept min/max/avg `8192 / 8192 / 8192.0`
+
+- Jitter and reordering with decay plus top-50% / 4-bit compression:
+- Command: `python experiments\distributed_train.py --base-latency-ms 1 --jitter-ms 1 --reorder-chance 0.5 --max-staleness 5 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-curve experiments\distributed_combined_top50_4bit_decay_jitter_reorder_curve.csv --output-summary experiments\distributed_combined_top50_4bit_decay_jitter_reorder_summary.json`
+- Final eval loss: `2.3596200942993164`
+- Final eval loss delta vs baseline: `0.29627112908796827`
+- Incremental delta vs compression-only control: `0.22047598795457324`
+- Boundary delivery: `200 delivered`, delay min/max/avg `0 / 5 / 2.5 ms`, staleness multiplier min/max/avg `0.25 / 1.0 / 0.45084887223415804`, values kept min/max/avg `8192 / 8192 / 8192.0`
+
+- Summary:
+- `top50/4-bit` is slightly worse than `top50/6-bit` for the `1 ms` and jitter/reorder cases, but the gap remains small.
+- Under the harsher `2 ms` setting, the `4-bit` and `6-bit` combined runs are effectively tied, which suggests staleness is dominating the outcome more than quantization precision there.
+- That qualitative comparison is now backed by exact sparse payload byte reporting in the rerun artifacts below.
+
+## 2026-04-03 Exact Sparse Wire-Byte Comparison
+
+- Dense boundary tensor body:
+- Reference size: `65536` bytes per delivered boundary
+
+- Top-50% / 6-bit payload body:
+- Reference artifacts: `experiments/distributed_compression_top50_6bit_summary.json`, `experiments/distributed_combined_top50_6bit_decay_1ms_summary.json`, `experiments/distributed_combined_top50_6bit_decay_2ms_summary.json`, `experiments/distributed_combined_top50_6bit_decay_jitter_reorder_summary.json`
+- Sparse payload size: `22532` bytes per delivered boundary
+- Wire ratio vs dense: `0.34381103515625`
+- Final eval loss deltas vs baseline:
+- zero delay: `0.06150285764174024`
+- `1 ms` decay: `0.14099758321588673`
+- `2 ms` decay: `0.42207824100147606`
+- jitter/reorder decay: `0.2695574977181172`
+
+- Top-50% / 4-bit payload body:
+- Reference artifacts: `experiments/distributed_compression_top50_4bit_summary.json`, `experiments/distributed_combined_top50_4bit_decay_1ms_summary.json`, `experiments/distributed_combined_top50_4bit_decay_2ms_summary.json`, `experiments/distributed_combined_top50_4bit_decay_jitter_reorder_summary.json`
+- Sparse payload size: `20484` bytes per delivered boundary
+- Wire ratio vs dense: `0.31256103515625`
+- Final eval loss deltas vs baseline:
+- zero delay: `0.07579514113339503`
+- `1 ms` decay: `0.14502978324890137`
+- `2 ms` decay: `0.42067371715198876`
+- jitter/reorder decay: `0.29627112908796827`
+
+- Comparison:
+- `top50/4-bit` saves `2048` bytes per delivered boundary relative to `top50/6-bit`, which is about `9.1%` smaller.
+- Across the full `100`-step run with `200` delivered boundaries, that is `409600` fewer payload bytes.
+- The byte savings come with a small quality cost at zero delay (`+0.01429`) and `1 ms` delay (`+0.00403`), are effectively neutral at `2 ms`, and are somewhat worse under jitter/reorder (`+0.02671`).
+
+- Recommendation:
+- If the goal is quality per byte, `top50/4-bit` is the better operating point.
+- If the goal is the smallest quality penalty and transport cost is secondary, `top50/6-bit` remains the slightly safer point.
