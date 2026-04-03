@@ -1,10 +1,6 @@
 import numpy as np
 
-from training.compression import (
-    compress_boundary_payload,
-    cosine_similarity,
-    decompress_boundary_payload,
-)
+from training.compression import compress_boundary_payload, cosine_similarity, decompress_boundary_payload
 
 
 def test_compression_round_trip_preserves_signal() -> None:
@@ -29,4 +25,3 @@ def test_error_feedback_recovers_deferred_signal() -> None:
 
     assert np.linalg.norm(payload - restored_twice) < np.linalg.norm(payload - restored_once)
     assert np.linalg.norm(second_error) <= np.linalg.norm(first_error)
-

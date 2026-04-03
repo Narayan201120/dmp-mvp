@@ -85,3 +85,5 @@
 
 - Summary:
 - Compression now perturbs the numerical training path end to end. On this toy setup, stronger compression degrades eval loss substantially, and the current error-feedback implementation is not helping yet.
+- Follow-up:
+- Boundary-activation error feedback is now treated as unsupported in the runtime because carrying residuals across independent batches distorts the signal. The EF artifacts above remain useful as diagnostic evidence of that failure mode.

@@ -155,7 +155,6 @@ def test_compressed_boundary_training_still_learns_and_reports_metadata() -> Non
     coordinator, bus = _build_coordinator(
         compression_topk_ratio=0.25,
         compression_num_bits=8,
-        compression_error_feedback=True,
     )
     batch = _training_batch()
 
@@ -177,6 +176,15 @@ def test_compressed_boundary_training_still_learns_and_reports_metadata() -> Non
     assert all(event["compression_applied"] for event in boundary_events)
     assert all(event["compression_num_bits"] == 8 for event in boundary_events)
     assert all(event["compressed_values"] < 3 * 7 * 16 for event in boundary_events)
+
+
+def test_boundary_activation_error_feedback_is_rejected() -> None:
+    with pytest.raises(ValueError, match="not supported for boundary activations"):
+        _build_coordinator(
+            compression_topk_ratio=0.25,
+            compression_num_bits=8,
+            compression_error_feedback=True,
+        )
 
 
 def test_packet_loss_fails_fast_without_advancing_state() -> None:

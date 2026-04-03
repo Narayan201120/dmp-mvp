@@ -163,3 +163,46 @@ def test_distributed_runner_rejects_mismatched_frozen_baseline() -> None:
             run(config)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_distributed_runner_rejects_boundary_activation_error_feedback() -> None:
+    tmp_dir = _make_workspace_tmp_dir()
+    try:
+        baseline_curve, baseline_summary = _write_baseline_reference(
+            tmp_dir,
+            steps=2,
+            eval_every=1,
+            seed=7,
+            learning_rate=3e-3,
+            d_model=16,
+            num_heads=4,
+            mlp_hidden_dim=32,
+            num_layers=4,
+            device="cpu",
+            final_eval_loss=2.25,
+        )
+        config = DistributedRunConfig(
+            output_curve=str(tmp_dir / "distributed_curve.csv"),
+            output_summary=str(tmp_dir / "distributed_summary.json"),
+            baseline_curve=str(baseline_curve),
+            baseline_summary=str(baseline_summary),
+            steps=2,
+            eval_every=1,
+            seed=7,
+            learning_rate=3e-3,
+            d_model=16,
+            num_heads=4,
+            mlp_hidden_dim=32,
+            num_layers=4,
+            device="cpu",
+            num_shards=2,
+            snapshot_depth=8,
+            compression_topk_ratio=0.25,
+            compression_num_bits=8,
+            compression_error_feedback=True,
+        )
+
+        with pytest.raises(ValueError, match="not supported for boundary activations"):
+            run(config)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

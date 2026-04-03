@@ -93,4 +93,3 @@ def cosine_similarity(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if lhs_norm == 0.0 or rhs_norm == 0.0:
         return 1.0 if lhs_norm == rhs_norm else 0.0
     return float(np.dot(lhs_vec, rhs_vec) / (lhs_norm * rhs_norm))
-

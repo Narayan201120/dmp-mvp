@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 import math
 import random
 
-import numpy as np
 import torch
 
 from daemon.node import Node
@@ -51,7 +50,6 @@ class WindowCoordinator:
     compression_num_bits: int = 16
     compression_error_feedback: bool = False
     rng: random.Random = field(default_factory=random.Random, repr=False)
-    _compression_feedback: dict[tuple[int, int], np.ndarray] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.max_staleness < 0:
@@ -66,6 +64,11 @@ class WindowCoordinator:
             raise ValueError("compression_topk_ratio must be in (0.0, 1.0]")
         if not 1 <= self.compression_num_bits <= 16:
             raise ValueError("compression_num_bits must be between 1 and 16")
+        if self.compression_error_feedback:
+            raise ValueError(
+                "compression_error_feedback is not supported for boundary activations; "
+                "carry-over residuals across independent batches distort the signal"
+            )
 
     async def run_window(
         self,
@@ -320,17 +323,14 @@ class WindowCoordinator:
                 },
             )
 
-        feedback = self._compression_feedback.get(edge) if self.compression_error_feedback else None
-        compressed, next_error = compress_boundary_payload(
+        compressed, _next_error = compress_boundary_payload(
             payload.tensor,
             topk_ratio=self.compression_topk_ratio,
             num_bits=self.compression_num_bits,
-            error_feedback=feedback,
+            error_feedback=None,
         )
-        if self.compression_error_feedback:
-            self._compression_feedback[edge] = next_error
-
         reconstructed = decompress_boundary_payload(compressed)
+
         reconstructed_tensor = torch.from_numpy(reconstructed.copy()).to(
             device=source_tensor.device,
             dtype=source_tensor.dtype,

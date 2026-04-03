@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`23 passed`)
+- test suite passing (`24 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -31,6 +31,7 @@ The current implementation is intentionally narrower than the full design docume
 - the `1 ms` / `max_staleness=0` edge still fails fast with a stale-boundary error as designed
 - staleness-weighted delayed sweeps now produce measurable eval-loss deltas against baseline
 - end-to-end compression sweeps now produce measurable eval-loss deltas against baseline and record boundary density stats
+- boundary-activation error feedback is now rejected explicitly; the older EF artifacts are retained only as diagnostic evidence
 
 ## Current Test Command
 
