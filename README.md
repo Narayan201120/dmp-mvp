@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`24 passed`)
+- test suite passing (`25 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -32,6 +32,8 @@ The current implementation is intentionally narrower than the full design docume
 - staleness-weighted delayed sweeps now produce measurable eval-loss deltas against baseline
 - end-to-end compression sweeps now produce measurable eval-loss deltas against baseline and record boundary density stats
 - boundary-activation error feedback is now rejected explicitly; the older EF artifacts are retained only as diagnostic evidence
+- supported non-EF compression tuning shows that keeping more boundary values matters more than raising quantization precision on this toy setup
+- first combined staleness-plus-compression matrix is complete for the supported `top50/6-bit` point
 
 ## Current Test Command
 
@@ -59,7 +61,7 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the completed staleness-weighted and compression sweeps as the current control envelope:
+Use the current combined tradeoff artifacts to compare `top50/4-bit` against `top50/6-bit` under delay and to add exact sparse wire-byte reporting:
 
 - centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
@@ -77,5 +79,14 @@ Use the completed staleness-weighted and compression sweeps as the current contr
   - `experiments/distributed_decay_jitter_reorder_summary.json`
 - compression artifacts:
   - `experiments/distributed_compression_top25_8bit_summary.json`
+  - `experiments/distributed_compression_top50_8bit_summary.json`
+  - `experiments/distributed_compression_top50_6bit_summary.json`
+  - `experiments/distributed_compression_top50_4bit_summary.json`
+  - `experiments/distributed_compression_top25_12bit_summary.json`
+- combined tradeoff artifacts:
+  - `experiments/distributed_combined_top50_6bit_decay_1ms_summary.json`
+  - `experiments/distributed_combined_top50_6bit_decay_2ms_summary.json`
+  - `experiments/distributed_combined_top50_6bit_decay_jitter_reorder_summary.json`
+- diagnostic-only unsupported EF artifacts:
   - `experiments/distributed_compression_top25_8bit_ef_summary.json`
   - `experiments/distributed_compression_top10_4bit_ef_summary.json`
