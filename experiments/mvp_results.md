@@ -218,3 +218,24 @@
 - Recommendation:
 - If the goal is quality per byte, `top50/4-bit` is the better operating point.
 - If the goal is the smallest quality penalty and transport cost is secondary, `top50/6-bit` remains the slightly safer point.
+
+## 2026-04-08 Multi-Process Forward And Train-Step Smoke
+
+- Command: `python experiments\process_window.py`
+- Summary artifact: `experiments/process_window_summary.json`
+- Runtime shape: `3` separate localhost worker processes, one shard per process, boundary handoff over TCP
+- Input shape: `[2, 8]`
+- Logits shape: `[2, 8, 32]`
+- Max absolute difference vs reference model: `0.0`
+- Forward result: `matches_reference = true`
+- Train-step result:
+- process loss before: `3.5389187335968018`
+- process loss after: `2.9440715312957764`
+- reference loss before: `3.5389187335968018`
+- reference loss after: `2.9440715312957764`
+- train-step deltas: `0.0` before, `0.0` after
+- Train-step result: `matches_reference = true`
+
+- Summary:
+- This is the first hardware-facing slice beyond the in-process simulator: shard execution and one exact backward/update step both survive crossing real OS process boundaries and a simple socket protocol.
+- The next gap is not basic cross-process backprop anymore. It is scaling this exactness from one smoke-step to a repeated-step training runtime with version tracking, checkpointing, and eventually the same transport perturbations used by the simulator.

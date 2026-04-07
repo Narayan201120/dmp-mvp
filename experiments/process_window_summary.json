@@ -1,0 +1,40 @@
+{
+  "num_shards": 3,
+  "input_shape": [
+    2,
+    8
+  ],
+  "logits_shape": [
+    2,
+    8,
+    32
+  ],
+  "max_abs_diff": 0.0,
+  "matches_reference": true,
+  "train_step": {
+    "loss_before": 3.5389187335968018,
+    "loss_after": 2.9440715312957764,
+    "reference_loss_before": 3.5389187335968018,
+    "reference_loss_after": 2.9440715312957764,
+    "loss_before_delta": 0.0,
+    "loss_after_delta": 0.0,
+    "matches_reference": true
+  },
+  "processes": [
+    {
+      "pid": 25308,
+      "returncode": null,
+      "alive": true
+    },
+    {
+      "pid": 21724,
+      "returncode": null,
+      "alive": true
+    },
+    {
+      "pid": 6720,
+      "returncode": null,
+      "alive": true
+    }
+  ]
+}

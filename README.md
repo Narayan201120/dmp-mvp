@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`26 passed`)
+- test suite passing (`29 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -37,6 +37,7 @@ The current implementation is intentionally narrower than the full design docume
 - `top50/4-bit` versus `top50/6-bit` combined-delay comparison is complete, and the gap stays small once staleness becomes the dominant source of damage
 - exact sparse payload byte reporting is now wired into the experiment summaries
 - current byte-aware recommendation: `top50/4-bit` for better quality per byte, `top50/6-bit` for a slightly safer quality margin under jitter
+- first multi-process shard smoke now reproduces both forward logits and one train step exactly across separate localhost worker processes
 
 ## Current Test Command
 
@@ -48,7 +49,7 @@ python -m pytest tests -q -p no:cacheprovider
 
 ```text
 baseline/     centralized reference training scaffold
-daemon/       runtime coordination and loop scaffolding
+daemon/       runtime coordination, loop scaffolding, and process-runtime helpers
 eval/         frozen eval artifact
 experiments/  run outputs
 sim/          network emulation helpers
@@ -64,7 +65,7 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the current byte-aware tradeoff artifacts to pick the operating point for future sweeps, then retune staleness around that choice:
+Use the new process path as the bridge out of pure simulation, now that it covers both exact forward execution and one exact train step across separate workers:
 
 - centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
@@ -93,6 +94,10 @@ Use the current byte-aware tradeoff artifacts to pick the operating point for fu
   - `experiments/distributed_combined_top50_4bit_decay_1ms_summary.json`
   - `experiments/distributed_combined_top50_4bit_decay_2ms_summary.json`
   - `experiments/distributed_combined_top50_4bit_decay_jitter_reorder_summary.json`
+- first multi-process smoke artifact:
+  - `experiments/process_window_summary.json`
 - diagnostic-only unsupported EF artifacts:
   - `experiments/distributed_compression_top25_8bit_ef_summary.json`
   - `experiments/distributed_compression_top10_4bit_ef_summary.json`
+
+The next implementation step is not another simulator sweep. It is turning this exact one-step process runtime into a repeated-step training path with versioning, checkpoints, and eventually the same delay/compression controls that the in-process coordinator already exposes.
