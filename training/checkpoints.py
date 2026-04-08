@@ -4,6 +4,7 @@ from collections import OrderedDict
 from typing import Dict, Mapping
 
 import numpy as np
+import torch
 from torch import nn
 
 
@@ -21,6 +22,16 @@ def module_state_to_numpy(module: nn.Module) -> dict[str, np.ndarray]:
         else value.detach().cpu().numpy().copy()
         for key, value in module.state_dict().items()
     }
+
+
+def numpy_state_to_module(module: nn.Module, state: StateDict) -> None:
+    module_state = module.state_dict()
+    _ensure_same_keys(module_state, state)
+    converted_state = {}
+    for key, tensor in module_state.items():
+        value = np.asarray(state[key])
+        converted_state[key] = torch.from_numpy(value.copy()).to(device=tensor.device, dtype=tensor.dtype)
+    module.load_state_dict(converted_state)
 
 
 def subtract_state(lhs: StateDict, rhs: StateDict) -> dict[str, np.ndarray]:
@@ -93,6 +104,17 @@ class SnapshotStore:
         if not candidates:
             raise KeyError("no rollback target exists before the failing version")
         return candidates[-1]
+
+    def discard_after(self, version: int) -> None:
+        if self._base_version is None or self._base_state is None:
+            raise KeyError("no snapshots have been saved")
+        if version < self._base_version or version > self.latest_version():
+            raise KeyError(f"version {version} is outside the retained snapshot window")
+        restored = self.restore(version)
+        for delta_version in list(self._deltas.keys()):
+            if delta_version > version:
+                del self._deltas[delta_version]
+        self._head_state = restored
 
     def _prune(self) -> None:
         assert self._base_version is not None

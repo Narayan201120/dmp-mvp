@@ -1,5 +1,17 @@
 {
   "num_shards": 3,
+  "transport_config": {
+    "base_latency_ms": 1,
+    "jitter_ms": 0,
+    "packet_loss": 0.0,
+    "reorder_chance": 0.0,
+    "max_staleness": 2,
+    "window_budget_ms": 1,
+    "staleness_decay_rate": 0.5,
+    "staleness_floor": 0.25,
+    "compression_topk_ratio": 0.5,
+    "compression_num_bits": 4
+  },
   "input_shape": [
     2,
     8
@@ -9,36 +21,36 @@
     8,
     32
   ],
-  "max_abs_diff": 0.0,
-  "matches_reference": true,
+  "max_abs_diff": 1.5742093324661255,
+  "matches_reference": false,
   "train_step": {
     "num_steps": 3,
-    "loss_before": 2.6024177074432373,
-    "loss_after": 2.370682954788208,
+    "loss_before": 2.7214910984039307,
+    "loss_after": 2.5178654193878174,
     "reference_loss_before": 2.6024177074432373,
     "reference_loss_after": 2.370682954788208,
-    "loss_before_delta": 0.0,
-    "loss_after_delta": 0.0,
-    "matches_reference": true,
+    "loss_before_delta": 0.11907339096069336,
+    "loss_after_delta": 0.14718246459960938,
+    "matches_reference": false,
     "loss_history": [
       {
         "version": 0,
-        "loss_before": 3.5389187335968018,
-        "loss_after": 2.9440715312957764,
+        "loss_before": 3.479246139526367,
+        "loss_after": 2.9400129318237305,
         "reference_loss_before": 3.5389187335968018,
         "reference_loss_after": 2.9440715312957764
       },
       {
         "version": 1,
-        "loss_before": 2.9440715312957764,
-        "loss_after": 2.6024177074432373,
+        "loss_before": 2.9400129318237305,
+        "loss_after": 2.7214910984039307,
         "reference_loss_before": 2.9440715312957764,
         "reference_loss_after": 2.6024177074432373
       },
       {
         "version": 2,
-        "loss_before": 2.6024177074432373,
-        "loss_after": 2.370682954788208,
+        "loss_before": 2.7214910984039307,
+        "loss_after": 2.5178654193878174,
         "reference_loss_before": 2.6024177074432373,
         "reference_loss_after": 2.370682954788208
       }
@@ -49,36 +61,36 @@
       "source_shard": 0,
       "target_shard": 1,
       "status": "delivered",
-      "delay_ms": 0,
-      "simulated_current_version": 3,
-      "staleness_multiplier": 1.0,
-      "compression_applied": false,
-      "compressed_values": 336,
-      "payload_wire_bytes": 1344,
+      "delay_ms": 1,
+      "simulated_current_version": 4,
+      "staleness_multiplier": 0.6065306597126334,
+      "compression_applied": true,
+      "compressed_values": 168,
+      "payload_wire_bytes": 424,
       "dense_payload_wire_bytes": 1344,
-      "payload_wire_ratio": 1.0,
-      "compression_topk_ratio": 1.0,
-      "compression_num_bits": null
+      "payload_wire_ratio": 0.31547619047619047,
+      "compression_topk_ratio": 0.5,
+      "compression_num_bits": 4
     },
     {
       "source_shard": 1,
       "target_shard": 2,
       "status": "delivered",
-      "delay_ms": 0,
-      "simulated_current_version": 3,
-      "staleness_multiplier": 1.0,
-      "compression_applied": false,
-      "compressed_values": 336,
-      "payload_wire_bytes": 1344,
+      "delay_ms": 1,
+      "simulated_current_version": 4,
+      "staleness_multiplier": 0.6065306597126334,
+      "compression_applied": true,
+      "compressed_values": 168,
+      "payload_wire_bytes": 424,
       "dense_payload_wire_bytes": 1344,
-      "payload_wire_ratio": 1.0,
-      "compression_topk_ratio": 1.0,
-      "compression_num_bits": null
+      "payload_wire_ratio": 0.31547619047619047,
+      "compression_topk_ratio": 0.5,
+      "compression_num_bits": 4
     }
   ],
   "processes": [
     {
-      "pid": 3028,
+      "pid": 12180,
       "returncode": null,
       "alive": true,
       "version": 3,
@@ -91,7 +103,7 @@
       ]
     },
     {
-      "pid": 23132,
+      "pid": 9636,
       "returncode": null,
       "alive": true,
       "version": 3,
@@ -104,7 +116,7 @@
       ]
     },
     {
-      "pid": 15004,
+      "pid": 21264,
       "returncode": null,
       "alive": true,
       "version": 3,

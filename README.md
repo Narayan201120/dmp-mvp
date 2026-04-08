@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`29 passed`)
+- test suite passing (`33 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -37,7 +37,10 @@ The current implementation is intentionally narrower than the full design docume
 - `top50/4-bit` versus `top50/6-bit` combined-delay comparison is complete, and the gap stays small once staleness becomes the dominant source of damage
 - exact sparse payload byte reporting is now wired into the experiment summaries
 - current byte-aware recommendation: `top50/4-bit` for better quality per byte, `top50/6-bit` for a slightly safer quality margin under jitter
-- first multi-process shard smoke now reproduces both forward logits and one train step exactly across separate localhost worker processes
+- first multi-process shard smoke now reproduces forward logits, repeated train steps, and checkpoint/version advancement exactly across separate localhost worker processes
+- the process runtime now also supports delay, staleness decay, and compression on the real worker handoff path
+- the process runtime now rolls all workers back to the last consistent checkpoint after a partial commit failure
+- first process-side comparison sweep is complete at the `top50/4-bit` operating point, and the degradation ordering matches the simulator (`compression-only < 1 ms decay < 2 ms decay`)
 
 ## Current Test Command
 
@@ -65,7 +68,7 @@ training/     core math, protocol, shard, and state logic
 
 ## Immediate Next Step
 
-Use the new process path as the bridge out of pure simulation, now that it covers both exact forward execution and one exact train step across separate workers:
+Use the new process path as the bridge out of pure simulation, now that it covers exact forward execution plus repeated exact train steps across separate workers and can apply the same boundary perturbations directly:
 
 - centralized reference artifacts:
   - `baseline/baseline_loss_curve.csv`
@@ -100,4 +103,4 @@ Use the new process path as the bridge out of pure simulation, now that it cover
   - `experiments/distributed_compression_top25_8bit_ef_summary.json`
   - `experiments/distributed_compression_top10_4bit_ef_summary.json`
 
-The next implementation step is not another simulator sweep. It is turning this exact one-step process runtime into a repeated-step training path with versioning, checkpoints, and eventually the same delay/compression controls that the in-process coordinator already exposes.
+The next implementation step is not another simulator sweep. It is expanding the now-transactional process runtime from the first `top50/4-bit` comparison points into a broader process-side matrix and then broadening rollback coverage beyond the synthetic partial-commit case.

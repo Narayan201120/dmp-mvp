@@ -17,6 +17,7 @@ from daemon.messaging import MessageBus
 from daemon.node import Node
 from daemon.process_runtime import ProcessWindowRunner
 from daemon.state import NodeState
+from sim.network import NetworkConfig
 from training.model_factory import ToyTransformerConfig, build_toy_transformer
 from training.reference import write_json
 from training.shard import build_transformer_shards
@@ -28,6 +29,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a multi-process shard smoke test for forward and one train step.")
     parser.add_argument("--output-summary", default=str(DEFAULT_OUTPUT_SUMMARY))
     parser.add_argument("--num-shards", type=int, default=3)
+    parser.add_argument("--base-latency-ms", type=int, default=0)
+    parser.add_argument("--jitter-ms", type=int, default=0)
+    parser.add_argument("--packet-loss", type=float, default=0.0)
+    parser.add_argument("--reorder-chance", type=float, default=0.0)
+    parser.add_argument("--max-staleness", type=int, default=0)
+    parser.add_argument("--window-budget-ms", type=int, default=1)
+    parser.add_argument("--staleness-decay-rate", type=float, default=0.0)
+    parser.add_argument("--staleness-floor", type=float, default=1.0)
+    parser.add_argument("--compression-topk-ratio", type=float, default=1.0)
+    parser.add_argument("--compression-num-bits", type=int, default=16)
     return parser.parse_args()
 
 
@@ -58,7 +69,18 @@ def _build_reference_coordinator(shards) -> WindowCoordinator:
     return WindowCoordinator(nodes=nodes)
 
 
-def run(*, output_summary: Path, num_shards: int) -> dict[str, object]:
+def run(
+    *,
+    output_summary: Path,
+    num_shards: int,
+    network_config: NetworkConfig | None = None,
+    max_staleness: int = 0,
+    window_budget_ms: int = 1,
+    staleness_decay_rate: float = 0.0,
+    staleness_floor: float = 1.0,
+    compression_topk_ratio: float = 1.0,
+    compression_num_bits: int = 16,
+) -> dict[str, object]:
     config = ToyTransformerConfig(
         vocab_size=32,
         max_seq_len=8,
@@ -82,31 +104,73 @@ def run(*, output_summary: Path, num_shards: int) -> dict[str, object]:
     with torch.no_grad():
         reference = model(input_ids).to(dtype=torch.float32)
 
-    reference_train = asyncio.run(_build_reference_coordinator(reference_shards).train_window(training_batch, version=0))
+    reference_coordinator = _build_reference_coordinator(reference_shards)
+    reference_train_results = [
+        asyncio.run(reference_coordinator.train_window(training_batch, version=version))
+        for version in range(3)
+    ]
 
-    with ProcessWindowRunner(process_shards, learning_rate=1e-2, optimizer_name="adam") as runner:
+    with ProcessWindowRunner(
+        process_shards,
+        learning_rate=1e-2,
+        optimizer_name="adam",
+        network_config=network_config or NetworkConfig(),
+        max_staleness=max_staleness,
+        window_budget_ms=window_budget_ms,
+        staleness_decay_rate=staleness_decay_rate,
+        staleness_floor=staleness_floor,
+        compression_topk_ratio=compression_topk_ratio,
+        compression_num_bits=compression_num_bits,
+    ) as runner:
         result = runner.run_window(input_ids, version=0)
-        process_train = runner.train_window(training_batch, version=0)
+        process_train_results = [runner.train_window(training_batch, version=version) for version in range(3)]
         process_status = runner.process_status()
+        boundary_events = runner.last_boundary_events()
 
     max_abs_diff = float(torch.max(torch.abs(reference - result)).item())
-    loss_before_delta = abs(process_train.loss_before - reference_train.loss_before)
-    loss_after_delta = abs(process_train.loss_after - reference_train.loss_after)
+    final_process_train = process_train_results[-1]
+    final_reference_train = reference_train_results[-1]
+    loss_before_delta = abs(final_process_train.loss_before - final_reference_train.loss_before)
+    loss_after_delta = abs(final_process_train.loss_after - final_reference_train.loss_after)
     summary = {
         "num_shards": num_shards,
+        "transport_config": {
+            "base_latency_ms": (network_config or NetworkConfig()).base_latency_ms,
+            "jitter_ms": (network_config or NetworkConfig()).jitter_ms,
+            "packet_loss": (network_config or NetworkConfig()).packet_loss,
+            "reorder_chance": (network_config or NetworkConfig()).reorder_chance,
+            "max_staleness": max_staleness,
+            "window_budget_ms": window_budget_ms,
+            "staleness_decay_rate": staleness_decay_rate,
+            "staleness_floor": staleness_floor,
+            "compression_topk_ratio": compression_topk_ratio,
+            "compression_num_bits": compression_num_bits,
+        },
         "input_shape": list(input_ids.shape),
         "logits_shape": list(result.shape),
         "max_abs_diff": max_abs_diff,
         "matches_reference": bool(torch.allclose(reference, result, atol=1e-6, rtol=1e-6)),
         "train_step": {
-            "loss_before": process_train.loss_before,
-            "loss_after": process_train.loss_after,
-            "reference_loss_before": reference_train.loss_before,
-            "reference_loss_after": reference_train.loss_after,
+            "num_steps": 3,
+            "loss_before": final_process_train.loss_before,
+            "loss_after": final_process_train.loss_after,
+            "reference_loss_before": final_reference_train.loss_before,
+            "reference_loss_after": final_reference_train.loss_after,
             "loss_before_delta": loss_before_delta,
             "loss_after_delta": loss_after_delta,
             "matches_reference": loss_before_delta <= 1e-6 and loss_after_delta <= 1e-6,
+            "loss_history": [
+                {
+                    "version": process_result.version,
+                    "loss_before": process_result.loss_before,
+                    "loss_after": process_result.loss_after,
+                    "reference_loss_before": reference_result.loss_before,
+                    "reference_loss_after": reference_result.loss_after,
+                }
+                for process_result, reference_result in zip(process_train_results, reference_train_results)
+            ],
         },
+        "boundary_events": boundary_events,
         "processes": process_status,
     }
     write_json(output_summary, summary)
@@ -115,7 +179,22 @@ def run(*, output_summary: Path, num_shards: int) -> dict[str, object]:
 
 def main() -> None:
     args = parse_args()
-    summary = run(output_summary=Path(args.output_summary), num_shards=args.num_shards)
+    summary = run(
+        output_summary=Path(args.output_summary),
+        num_shards=args.num_shards,
+        network_config=NetworkConfig(
+            base_latency_ms=args.base_latency_ms,
+            jitter_ms=args.jitter_ms,
+            packet_loss=args.packet_loss,
+            reorder_chance=args.reorder_chance,
+        ),
+        max_staleness=args.max_staleness,
+        window_budget_ms=args.window_budget_ms,
+        staleness_decay_rate=args.staleness_decay_rate,
+        staleness_floor=args.staleness_floor,
+        compression_topk_ratio=args.compression_topk_ratio,
+        compression_num_bits=args.compression_num_bits,
+    )
     print(json.dumps(summary, indent=2))
 
 

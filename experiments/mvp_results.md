@@ -219,7 +219,7 @@
 - If the goal is quality per byte, `top50/4-bit` is the better operating point.
 - If the goal is the smallest quality penalty and transport cost is secondary, `top50/6-bit` remains the slightly safer point.
 
-## 2026-04-08 Multi-Process Forward And Train-Step Smoke
+## 2026-04-08 Multi-Process Repeated-Step Smoke
 
 - Command: `python experiments\process_window.py`
 - Summary artifact: `experiments/process_window_summary.json`
@@ -228,14 +228,52 @@
 - Logits shape: `[2, 8, 32]`
 - Max absolute difference vs reference model: `0.0`
 - Forward result: `matches_reference = true`
-- Train-step result:
-- process loss before: `3.5389187335968018`
-- process loss after: `2.9440715312957764`
-- reference loss before: `3.5389187335968018`
-- reference loss after: `2.9440715312957764`
-- train-step deltas: `0.0` before, `0.0` after
-- Train-step result: `matches_reference = true`
+- Repeated train-step result:
+- versions exercised: `0, 1, 2`
+- final process loss before: `2.6024177074432373`
+- final process loss after: `2.370682954788208`
+- final reference loss before: `2.6024177074432373`
+- final reference loss after: `2.370682954788208`
+- final train-step deltas: `0.0` before, `0.0` after
+- full repeated-step result: `matches_reference = true`
+- Worker state after the run:
+- all workers at version `3`
+- all workers with `last_checkpoint_version = 3`
+- all workers retaining checkpoint versions `[0, 1, 2, 3]`
 
 - Summary:
-- This is the first hardware-facing slice beyond the in-process simulator: shard execution and one exact backward/update step both survive crossing real OS process boundaries and a simple socket protocol.
-- The next gap is not basic cross-process backprop anymore. It is scaling this exactness from one smoke-step to a repeated-step training runtime with version tracking, checkpointing, and eventually the same transport perturbations used by the simulator.
+- This is the first hardware-facing slice beyond the in-process simulator: shard execution, reverse-order gradient flow, repeated updates, and checkpoint/version advancement all survive crossing real OS process boundaries and a simple socket protocol.
+- The process runner now also exposes the same delay/staleness/compression knobs on the real worker handoff path, with coverage in the process-runtime tests.
+- The process runner now also restores all workers to the last consistent checkpoint after a synthetic partial-commit failure, with the retry path matching the reference trainer exactly.
+- The next gap is not basic cross-process training correctness anymore. It is using this rollback-capable process runtime for the first process-side comparison sweeps at the chosen operating point.
+
+## 2026-04-08 First Process-Side Comparison Sweep
+
+- Chosen operating point: `top50/4-bit`
+- Rationale: still the best quality-per-byte point from the earlier simulator sweep, so it is the right first transport-efficient setting to exercise on the real worker handoff path.
+
+- Compression-only process control:
+- Command: `python experiments\process_window.py --compression-topk-ratio 0.5 --compression-num-bits 4 --output-summary experiments\process_window_top50_4bit_summary.json`
+- Forward max-abs diff vs reference: `1.1463724374771118`
+- Final process loss after step `2`: `2.4611024856567383`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.09041953086853027`
+- Sparse boundary body: `424` bytes vs dense `1344` bytes, wire ratio `0.31547619047619047`
+
+- `1 ms` decay plus `top50/4-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 1 --max-staleness 2 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-summary experiments\process_window_top50_4bit_decay_1ms_summary.json`
+- Final process loss after step `2`: `2.5178654193878174`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.14718246459960938`
+- Boundary delivery: `1 ms`, staleness multiplier `0.6065306597126334`, same `424`-byte sparse body
+
+- `2 ms` decay plus `top50/4-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 2 --max-staleness 4 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-summary experiments\process_window_top50_4bit_decay_2ms_summary.json`
+- Final process loss after step `2`: `2.788839340209961`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.41815638542175293`
+- Boundary delivery: `2 ms`, staleness multiplier `0.36787944117144233`, same `424`-byte sparse body
+
+- Summary:
+- The process-side runtime now shows the same qualitative ordering as the simulator: compression alone causes a modest quality drop, `1 ms` decay is worse, and `2 ms` decay is substantially worse.
+- That makes the rollback-capable process runtime good enough for the first real transport-facing comparisons, instead of treating the simulator as the only place where perturbations can be studied.
