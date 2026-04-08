@@ -17,7 +17,7 @@ from daemon.messaging import MessageBus
 from daemon.node import Node
 from daemon.process_runtime import ProcessWindowRunner, ProcessWorkerEndpoint
 from daemon.state import NodeState
-from experiments.process_window import run
+from experiments.process_window import build_external_worker_launch_plan, run
 from sim.network import NetworkConfig
 from training.model_factory import ToyTransformerConfig, build_toy_transformer
 from training.shard import build_transformer_shards
@@ -214,6 +214,39 @@ def test_process_window_attaches_to_external_workers() -> None:
     assert all(status["managed"] is False for status in statuses)
     assert all(status["alive"] is True for status in statuses)
     assert all(status["version"] == 1 for status in statuses)
+
+
+def test_process_window_builds_external_launch_plan() -> None:
+    endpoints = [
+        ProcessWorkerEndpoint(host="192.168.1.11", port=43001),
+        ProcessWorkerEndpoint(host="192.168.1.12", port=43002),
+        ProcessWorkerEndpoint(host="192.168.1.13", port=43003),
+    ]
+
+    plan = build_external_worker_launch_plan(
+        worker_endpoints=endpoints,
+        compression_topk_ratio=0.5,
+        compression_num_bits=6,
+        base_latency_ms=1,
+        jitter_ms=1,
+        packet_loss=0.0,
+        reorder_chance=0.5,
+        max_staleness=5,
+        window_budget_ms=1,
+        staleness_decay_rate=0.5,
+        staleness_floor=0.25,
+        num_shards=3,
+    )
+
+    assert len(plan["worker_commands"]) == 3
+    assert plan["worker_commands"][0][-1] == "43001"
+    assert plan["worker_commands"][1][-1] == "43002"
+    assert plan["worker_commands"][2][-1] == "43003"
+    assert plan["coordinator_command"][0] == "python"
+    assert "--worker-endpoints" in plan["coordinator_command"]
+    assert "192.168.1.11:43001,192.168.1.12:43002,192.168.1.13:43003" in plan["coordinator_command"]
+    assert "--compression-num-bits" in plan["coordinator_command"]
+    assert "6" in plan["coordinator_command"]
 
 
 def test_process_window_experiment_writes_summary() -> None:

@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-shards", type=int, default=3)
     parser.add_argument("--worker-endpoints", type=str, default="")
     parser.add_argument("--stop-workers-on-close", action="store_true")
+    parser.add_argument("--print-launch-plan", action="store_true")
     parser.add_argument("--base-latency-ms", type=int, default=0)
     parser.add_argument("--jitter-ms", type=int, default=0)
     parser.add_argument("--packet-loss", type=float, default=0.0)
@@ -52,6 +53,70 @@ def _parse_worker_endpoints(raw_value: str) -> list[ProcessWorkerEndpoint] | Non
         host, port = item.strip().rsplit(":", maxsplit=1)
         endpoints.append(ProcessWorkerEndpoint(host=host, port=int(port)))
     return endpoints
+
+
+def build_external_worker_launch_plan(
+    *,
+    worker_endpoints: list[ProcessWorkerEndpoint],
+    compression_topk_ratio: float,
+    compression_num_bits: int,
+    base_latency_ms: int,
+    jitter_ms: int,
+    packet_loss: float,
+    reorder_chance: float,
+    max_staleness: int,
+    window_budget_ms: int,
+    staleness_decay_rate: float,
+    staleness_floor: float,
+    num_shards: int,
+    python_executable: str = "python",
+) -> dict[str, object]:
+    if not worker_endpoints:
+        raise ValueError("worker_endpoints are required to build a launch plan")
+
+    endpoint_arg = ",".join(f"{endpoint.host}:{endpoint.port}" for endpoint in worker_endpoints)
+    return {
+        "worker_commands": [
+            [
+                python_executable,
+                "-m",
+                "daemon.socket_worker",
+                "--bind-host",
+                "0.0.0.0",
+                "--port",
+                str(endpoint.port),
+            ]
+            for endpoint in worker_endpoints
+        ],
+        "coordinator_command": [
+            python_executable,
+            "experiments/process_window.py",
+            "--num-shards",
+            str(num_shards),
+            "--worker-endpoints",
+            endpoint_arg,
+            "--compression-topk-ratio",
+            str(compression_topk_ratio),
+            "--compression-num-bits",
+            str(compression_num_bits),
+            "--base-latency-ms",
+            str(base_latency_ms),
+            "--jitter-ms",
+            str(jitter_ms),
+            "--packet-loss",
+            str(packet_loss),
+            "--reorder-chance",
+            str(reorder_chance),
+            "--max-staleness",
+            str(max_staleness),
+            "--window-budget-ms",
+            str(window_budget_ms),
+            "--staleness-decay-rate",
+            str(staleness_decay_rate),
+            "--staleness-floor",
+            str(staleness_floor),
+        ],
+    }
 
 
 def _training_batch() -> torch.Tensor:
@@ -196,10 +261,30 @@ def run(
 
 def main() -> None:
     args = parse_args()
+    worker_endpoints = _parse_worker_endpoints(args.worker_endpoints)
+    if args.print_launch_plan:
+        if worker_endpoints is None:
+            raise ValueError("--print-launch-plan requires --worker-endpoints")
+        plan = build_external_worker_launch_plan(
+            worker_endpoints=worker_endpoints,
+            compression_topk_ratio=args.compression_topk_ratio,
+            compression_num_bits=args.compression_num_bits,
+            base_latency_ms=args.base_latency_ms,
+            jitter_ms=args.jitter_ms,
+            packet_loss=args.packet_loss,
+            reorder_chance=args.reorder_chance,
+            max_staleness=args.max_staleness,
+            window_budget_ms=args.window_budget_ms,
+            staleness_decay_rate=args.staleness_decay_rate,
+            staleness_floor=args.staleness_floor,
+            num_shards=args.num_shards,
+        )
+        print(json.dumps(plan, indent=2))
+        return
     summary = run(
         output_summary=Path(args.output_summary),
         num_shards=args.num_shards,
-        worker_endpoints=_parse_worker_endpoints(args.worker_endpoints),
+        worker_endpoints=worker_endpoints,
         stop_workers_on_close=args.stop_workers_on_close,
         network_config=NetworkConfig(
             base_latency_ms=args.base_latency_ms,

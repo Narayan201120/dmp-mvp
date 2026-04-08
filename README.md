@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`36 passed`)
+- test suite passing (`37 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -43,6 +43,7 @@ The current implementation is intentionally narrower than the full design docume
 - the process runtime now rolls all workers back to the last consistent checkpoint after a partial commit failure
 - the process runtime can now relaunch a dead worker from the last committed checkpoint and retry the interrupted step cleanly
 - the process runtime can now attach to externally hosted shard workers over TCP instead of assuming the parent owns every worker process
+- the process experiment entrypoint can now print a ready-to-run launch plan for external workers and the coordinator command
 - first process-side comparison sweep is complete at the `top50/4-bit` operating point, and the degradation ordering matches the simulator (`compression-only < 1 ms decay < 2 ms decay`)
 - process-side `top50/4-bit` versus `top50/6-bit` comparator is now complete, and `6-bit` keeps the safer quality margin once jitter/reordering enters the path
 
