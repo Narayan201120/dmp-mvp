@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import OrderedDict
 from dataclasses import dataclass
+import os
 import pickle
 import socket
 import sys
@@ -42,14 +43,20 @@ def _build_optimizer(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a shard worker that serves forward requests over localhost TCP.")
+    parser = argparse.ArgumentParser(description="Run a shard worker that serves forward requests over TCP.")
+    parser.add_argument("--bind-host", default="127.0.0.1")
     parser.add_argument("--port", required=True, type=int)
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    launch_config = pickle.load(sys.stdin.buffer)
+def _read_launch_config_from_stdin() -> dict[str, object] | None:
+    data = sys.stdin.buffer.read()
+    if not data:
+        return None
+    return pickle.loads(data)
+
+
+def _initialize_runtime_state(launch_config: dict[str, object]) -> dict[str, object]:
     shard = launch_config["shard"]
     snapshot_depth = int(launch_config["snapshot_depth"])
     optimizer = _build_optimizer(
@@ -66,39 +73,130 @@ def main() -> None:
         while len(optimizer_snapshots) > snapshot_depth:
             optimizer_snapshots.popitem(last=False)
 
-    current_version = 0
-    snapshot_store.save(current_version, module_state_to_numpy(shard))
-    save_optimizer_snapshot(current_version)
-    last_checkpoint_version = current_version
-    pending_update_version: int | None = None
-    active_windows: dict[int, ActiveWindow] = {}
+    if "model_snapshots" in launch_config and "optimizer_snapshots" in launch_config:
+        for version, state in launch_config["model_snapshots"]:
+            snapshot_store.save(int(version), state)
+        optimizer_snapshots.update(
+            OrderedDict(
+                (int(version), bytes(state))
+                for version, state in launch_config["optimizer_snapshots"]
+            )
+        )
+        current_version = int(launch_config["current_version"])
+        numpy_state_to_module(shard, snapshot_store.restore(current_version))
+        if current_version not in optimizer_snapshots:
+            raise KeyError(f"optimizer snapshot for version {current_version} is unavailable during startup")
+        optimizer.load_state_dict(pickle.loads(optimizer_snapshots[current_version]))
+        last_checkpoint_version = int(launch_config.get("last_checkpoint_version", current_version))
+    else:
+        current_version = 0
+        snapshot_store.save(current_version, module_state_to_numpy(shard))
+        save_optimizer_snapshot(current_version)
+        last_checkpoint_version = current_version
     shard.eval()
+    return {
+        "shard": shard,
+        "snapshot_depth": snapshot_depth,
+        "optimizer": optimizer,
+        "snapshot_store": snapshot_store,
+        "optimizer_snapshots": optimizer_snapshots,
+        "save_optimizer_snapshot": save_optimizer_snapshot,
+        "current_version": current_version,
+        "last_checkpoint_version": last_checkpoint_version,
+        "pending_update_version": None,
+        "active_windows": {},
+    }
+
+
+def _export_status(runtime_state: dict[str, object], *, bind_host: str, port: int) -> dict[str, object]:
+    snapshot_store = runtime_state["snapshot_store"]
+    return {
+        "kind": "status",
+        "pid": os.getpid(),
+        "host": bind_host,
+        "port": port,
+        "version": runtime_state["current_version"],
+        "last_checkpoint_version": runtime_state["last_checkpoint_version"],
+        "checkpoint_versions": snapshot_store.versions(),
+    }
+
+
+def _export_state(runtime_state: dict[str, object], *, bind_host: str, port: int) -> dict[str, object]:
+    snapshot_store = runtime_state["snapshot_store"]
+    optimizer_snapshots = runtime_state["optimizer_snapshots"]
+    return {
+        "kind": "export_state",
+        "pid": os.getpid(),
+        "host": bind_host,
+        "port": port,
+        "version": runtime_state["current_version"],
+        "last_checkpoint_version": runtime_state["last_checkpoint_version"],
+        "checkpoint_versions": snapshot_store.versions(),
+        "model_snapshots": [
+            (version, snapshot_store.restore(version))
+            for version in snapshot_store.versions()
+        ],
+        "optimizer_snapshots": list(optimizer_snapshots.items()),
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    launch_config = _read_launch_config_from_stdin()
+    runtime_state = _initialize_runtime_state(launch_config) if launch_config is not None else None
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", args.port))
+        server.bind((args.bind_host, args.port))
         server.listen()
 
         while True:
             connection, _ = server.accept()
             with connection:
                 message = recv_message(connection)
+
                 if message["kind"] == "ping":
                     send_message(connection, {"kind": "ready"})
                     continue
-                if message["kind"] == "status":
+
+                if message["kind"] == "configure":
+                    runtime_state = _initialize_runtime_state(message["config"])
                     send_message(
                         connection,
                         {
-                            "kind": "status",
-                            "version": current_version,
-                            "last_checkpoint_version": last_checkpoint_version,
-                            "checkpoint_versions": snapshot_store.versions(),
+                            "kind": "configured",
+                            "pid": os.getpid(),
+                            "host": args.bind_host,
+                            "port": args.port,
+                            "version": runtime_state["current_version"],
                         },
                     )
                     continue
+
+                if runtime_state is None:
+                    raise RuntimeError("worker must be configured before handling runtime messages")
+
+                shard = runtime_state["shard"]
+                optimizer = runtime_state["optimizer"]
+                snapshot_store = runtime_state["snapshot_store"]
+                optimizer_snapshots = runtime_state["optimizer_snapshots"]
+                save_optimizer_snapshot = runtime_state["save_optimizer_snapshot"]
+                current_version = int(runtime_state["current_version"])
+                last_checkpoint_version = int(runtime_state["last_checkpoint_version"])
+                pending_update_version = runtime_state["pending_update_version"]
+                active_windows: dict[int, ActiveWindow] = runtime_state["active_windows"]
+
+                if message["kind"] == "status":
+                    send_message(connection, _export_status(runtime_state, bind_host=args.bind_host, port=args.port))
+                    continue
+
+                if message["kind"] == "export_state":
+                    send_message(connection, _export_state(runtime_state, bind_host=args.bind_host, port=args.port))
+                    continue
+
                 if message["kind"] == "stop":
                     return
+
                 if message["kind"] == "run":
                     if int(message["version"]) != current_version:
                         raise RuntimeError(
@@ -142,7 +240,7 @@ def main() -> None:
                         input_hidden_states=input_hidden_states,
                         output_tensor=output,
                     )
-                    pending_update_version = None
+                    runtime_state["pending_update_version"] = None
 
                     send_message(
                         connection,
@@ -167,7 +265,7 @@ def main() -> None:
                     if state.input_hidden_states is not None:
                         assert state.input_hidden_states.grad is not None
                         input_grad = state.input_hidden_states.grad.detach().to(device="cpu", dtype=torch.float32).numpy()
-                    pending_update_version = version
+                    runtime_state["pending_update_version"] = version
 
                     send_message(
                         connection,
@@ -190,7 +288,7 @@ def main() -> None:
                     if state.input_hidden_states is not None:
                         assert state.input_hidden_states.grad is not None
                         input_grad = state.input_hidden_states.grad.detach().to(device="cpu", dtype=torch.float32).numpy()
-                    pending_update_version = version
+                    runtime_state["pending_update_version"] = version
 
                     send_message(
                         connection,
@@ -204,25 +302,25 @@ def main() -> None:
 
                 if message["kind"] == "commit":
                     version = int(message["version"])
-                    if pending_update_version != version:
+                    if runtime_state["pending_update_version"] != version:
                         raise RuntimeError(
-                            f"worker commit mismatch: got {version}, pending {pending_update_version}"
+                            f"worker commit mismatch: got {version}, pending {runtime_state['pending_update_version']}"
                         )
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
                     shard.eval()
-                    current_version = version + 1
-                    snapshot_store.save(current_version, module_state_to_numpy(shard))
-                    save_optimizer_snapshot(current_version)
-                    last_checkpoint_version = current_version
-                    pending_update_version = None
+                    runtime_state["current_version"] = version + 1
+                    snapshot_store.save(runtime_state["current_version"], module_state_to_numpy(shard))
+                    save_optimizer_snapshot(runtime_state["current_version"])
+                    runtime_state["last_checkpoint_version"] = runtime_state["current_version"]
+                    runtime_state["pending_update_version"] = None
 
                     send_message(
                         connection,
                         {
                             "kind": "committed",
-                            "version": current_version,
-                            "last_checkpoint_version": last_checkpoint_version,
+                            "version": runtime_state["current_version"],
+                            "last_checkpoint_version": runtime_state["last_checkpoint_version"],
                             "checkpoint_versions": snapshot_store.versions(),
                         },
                     )
@@ -241,16 +339,16 @@ def main() -> None:
                     optimizer.load_state_dict(pickle.loads(optimizer_snapshots[version]))
                     optimizer.zero_grad(set_to_none=True)
                     shard.eval()
-                    current_version = version
-                    last_checkpoint_version = version
-                    pending_update_version = None
+                    runtime_state["current_version"] = version
+                    runtime_state["last_checkpoint_version"] = version
+                    runtime_state["pending_update_version"] = None
                     active_windows.clear()
                     send_message(
                         connection,
                         {
                             "kind": "rolled_back",
-                            "version": current_version,
-                            "last_checkpoint_version": last_checkpoint_version,
+                            "version": runtime_state["current_version"],
+                            "last_checkpoint_version": runtime_state["last_checkpoint_version"],
                             "checkpoint_versions": snapshot_store.versions(),
                         },
                     )
@@ -261,9 +359,9 @@ def main() -> None:
                     active_windows.pop(version, None)
                     optimizer.zero_grad(set_to_none=True)
                     shard.eval()
-                    if pending_update_version == version:
-                        pending_update_version = None
-                    send_message(connection, {"kind": "aborted", "version": current_version})
+                    if runtime_state["pending_update_version"] == version:
+                        runtime_state["pending_update_version"] = None
+                    send_message(connection, {"kind": "aborted", "version": runtime_state["current_version"]})
                     continue
 
                 raise RuntimeError(f"unsupported worker message kind: {message['kind']}")

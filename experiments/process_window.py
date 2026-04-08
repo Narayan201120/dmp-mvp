@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from daemon.main import WindowCoordinator
 from daemon.messaging import MessageBus
 from daemon.node import Node
-from daemon.process_runtime import ProcessWindowRunner
+from daemon.process_runtime import ProcessWindowRunner, ProcessWorkerEndpoint
 from daemon.state import NodeState
 from sim.network import NetworkConfig
 from training.model_factory import ToyTransformerConfig, build_toy_transformer
@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a multi-process shard smoke test for forward and one train step.")
     parser.add_argument("--output-summary", default=str(DEFAULT_OUTPUT_SUMMARY))
     parser.add_argument("--num-shards", type=int, default=3)
+    parser.add_argument("--worker-endpoints", type=str, default="")
+    parser.add_argument("--stop-workers-on-close", action="store_true")
     parser.add_argument("--base-latency-ms", type=int, default=0)
     parser.add_argument("--jitter-ms", type=int, default=0)
     parser.add_argument("--packet-loss", type=float, default=0.0)
@@ -40,6 +42,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compression-topk-ratio", type=float, default=1.0)
     parser.add_argument("--compression-num-bits", type=int, default=16)
     return parser.parse_args()
+
+
+def _parse_worker_endpoints(raw_value: str) -> list[ProcessWorkerEndpoint] | None:
+    if not raw_value.strip():
+        return None
+    endpoints: list[ProcessWorkerEndpoint] = []
+    for item in raw_value.split(","):
+        host, port = item.strip().rsplit(":", maxsplit=1)
+        endpoints.append(ProcessWorkerEndpoint(host=host, port=int(port)))
+    return endpoints
 
 
 def _training_batch() -> torch.Tensor:
@@ -73,6 +85,8 @@ def run(
     *,
     output_summary: Path,
     num_shards: int,
+    worker_endpoints: list[ProcessWorkerEndpoint] | None = None,
+    stop_workers_on_close: bool | None = None,
     network_config: NetworkConfig | None = None,
     max_staleness: int = 0,
     window_budget_ms: int = 1,
@@ -114,6 +128,8 @@ def run(
         process_shards,
         learning_rate=1e-2,
         optimizer_name="adam",
+        worker_endpoints=worker_endpoints,
+        stop_workers_on_close=stop_workers_on_close,
         network_config=network_config or NetworkConfig(),
         max_staleness=max_staleness,
         window_budget_ms=window_budget_ms,
@@ -134,6 +150,7 @@ def run(
     loss_after_delta = abs(final_process_train.loss_after - final_reference_train.loss_after)
     summary = {
         "num_shards": num_shards,
+        "worker_mode": "external" if worker_endpoints is not None else "managed_local",
         "transport_config": {
             "base_latency_ms": (network_config or NetworkConfig()).base_latency_ms,
             "jitter_ms": (network_config or NetworkConfig()).jitter_ms,
@@ -182,6 +199,8 @@ def main() -> None:
     summary = run(
         output_summary=Path(args.output_summary),
         num_shards=args.num_shards,
+        worker_endpoints=_parse_worker_endpoints(args.worker_endpoints),
+        stop_workers_on_close=args.stop_workers_on_close,
         network_config=NetworkConfig(
             base_latency_ms=args.base_latency_ms,
             jitter_ms=args.jitter_ms,

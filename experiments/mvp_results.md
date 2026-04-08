@@ -277,3 +277,69 @@
 - Summary:
 - The process-side runtime now shows the same qualitative ordering as the simulator: compression alone causes a modest quality drop, `1 ms` decay is worse, and `2 ms` decay is substantially worse.
 - That makes the rollback-capable process runtime good enough for the first real transport-facing comparisons, instead of treating the simulator as the only place where perturbations can be studied.
+
+## 2026-04-08 Process-Side Precision Comparator
+
+- Top-50% / 6-bit process control:
+- Command: `python experiments\process_window.py --compression-topk-ratio 0.5 --compression-num-bits 6 --output-summary experiments\process_window_top50_6bit_summary.json`
+- Final process loss after step `2`: `2.4419445991516113`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.07126164436340332`
+- Sparse boundary body: `466` bytes vs dense `1344` bytes, wire ratio `0.34672619047619047`
+
+- `1 ms` decay plus `top50/6-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 1 --max-staleness 2 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 6 --output-summary experiments\process_window_top50_6bit_decay_1ms_summary.json`
+- Final process loss after step `2`: `2.547651767730713`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.17696881294250488`
+
+- `2 ms` decay plus `top50/6-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 2 --max-staleness 4 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 6 --output-summary experiments\process_window_top50_6bit_decay_2ms_summary.json`
+- Final process loss after step `2`: `2.7900149822235107`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.41933202743530273`
+
+- Jitter/reorder decay plus `top50/6-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 1 --jitter-ms 1 --reorder-chance 0.5 --max-staleness 5 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 6 --output-summary experiments\process_window_top50_6bit_decay_jitter_reorder_summary.json`
+- Final process loss after step `2`: `2.747637987136841`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.3769550323486328`
+
+- Jitter/reorder decay plus `top50/4-bit`:
+- Command: `python experiments\process_window.py --base-latency-ms 1 --jitter-ms 1 --reorder-chance 0.5 --max-staleness 5 --staleness-decay-rate 0.5 --staleness-floor 0.25 --compression-topk-ratio 0.5 --compression-num-bits 4 --output-summary experiments\process_window_top50_4bit_decay_jitter_reorder_summary.json`
+- Final process loss after step `2`: `2.85243558883667`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.4817526340484619`
+
+- Comparison:
+- `top50/4-bit` still has the smaller payload body at `424` bytes versus `466` bytes for `top50/6-bit`.
+- On the process-side runtime, `top50/6-bit` is better at the compression-only control and much safer under jitter/reordering.
+- `top50/4-bit` is slightly better at the fixed `1 ms` point and effectively tied at `2 ms`, so the same high-level tradeoff still holds: `4-bit` for smaller payloads, `6-bit` for a safer quality margin when transport gets messier.
+
+- Rollback coverage:
+- The process-runtime tests now also cover synthetic partial-commit failures at both `version=0` and `version=1`.
+- In both cases, the runtime restores every worker to the last consistent checkpoint and the retried train step matches the in-process reference exactly.
+- The process runtime now also survives a real worker exit between committed steps by relaunching the dead shard from the last committed checkpoint and matching the reference trainer on the retried step.
+
+## 2026-04-08 External Worker Attach Smoke
+
+- Hardware-facing default:
+- Chosen operating point: `top50/6-bit`
+- Rationale: `top50/4-bit` remains the better quality-per-byte point, but the external-worker path should bias toward the safer jitter/reorder margin before chasing the last `42` payload bytes.
+
+- External-worker localhost control:
+- Command shape: `python experiments\process_window.py --worker-endpoints <host:port,...> --stop-workers-on-close --compression-topk-ratio 0.5 --compression-num-bits 6 --output-summary experiments\process_window_external_top50_6bit_summary.json`
+- Summary artifact: `experiments/process_window_external_top50_6bit_summary.json`
+- Worker mode: `external`
+- Final process loss after step `2`: `2.4419445991516113`
+- Final reference loss after step `2`: `2.370682954788208`
+- Final loss delta: `0.07126164436340332`
+- Sparse boundary body: `466` bytes vs dense `1344` bytes, wire ratio `0.34672619047619047`
+- Worker state after the run:
+- all workers externally hosted on `127.0.0.1`
+- all workers at version `3`
+- all workers retaining checkpoint versions `[0, 1, 2, 3]`
+
+- Summary:
+- This is the first run where the parent attaches to already-running shard servers instead of spawning and owning the workers directly.
+- That closes the main architectural gap between the localhost subprocess prototype and a real LAN deployment: the transport and training protocol no longer assume the coordinator and workers share one machine.

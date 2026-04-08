@@ -1,0 +1,142 @@
+{
+  "num_shards": 3,
+  "worker_mode": "external",
+  "transport_config": {
+    "base_latency_ms": 0,
+    "jitter_ms": 0,
+    "packet_loss": 0.0,
+    "reorder_chance": 0.0,
+    "max_staleness": 0,
+    "window_budget_ms": 1,
+    "staleness_decay_rate": 0.0,
+    "staleness_floor": 1.0,
+    "compression_topk_ratio": 0.5,
+    "compression_num_bits": 6
+  },
+  "input_shape": [
+    2,
+    8
+  ],
+  "logits_shape": [
+    2,
+    8,
+    32
+  ],
+  "max_abs_diff": 1.1095067262649536,
+  "matches_reference": false,
+  "train_step": {
+    "num_steps": 3,
+    "loss_before": 2.6386213302612305,
+    "loss_after": 2.4419445991516113,
+    "reference_loss_before": 2.6024177074432373,
+    "reference_loss_after": 2.370682954788208,
+    "loss_before_delta": 0.036203622817993164,
+    "loss_after_delta": 0.07126164436340332,
+    "matches_reference": false,
+    "loss_history": [
+      {
+        "version": 0,
+        "loss_before": 3.565009593963623,
+        "loss_after": 2.9937708377838135,
+        "reference_loss_before": 3.5389187335968018,
+        "reference_loss_after": 2.9440715312957764
+      },
+      {
+        "version": 1,
+        "loss_before": 2.9937708377838135,
+        "loss_after": 2.6386213302612305,
+        "reference_loss_before": 2.9440715312957764,
+        "reference_loss_after": 2.6024177074432373
+      },
+      {
+        "version": 2,
+        "loss_before": 2.6386213302612305,
+        "loss_after": 2.4419445991516113,
+        "reference_loss_before": 2.6024177074432373,
+        "reference_loss_after": 2.370682954788208
+      }
+    ]
+  },
+  "boundary_events": [
+    {
+      "source_shard": 0,
+      "target_shard": 1,
+      "status": "delivered",
+      "delay_ms": 0,
+      "simulated_current_version": 3,
+      "staleness_multiplier": 1.0,
+      "compression_applied": true,
+      "compressed_values": 168,
+      "payload_wire_bytes": 466,
+      "dense_payload_wire_bytes": 1344,
+      "payload_wire_ratio": 0.34672619047619047,
+      "compression_topk_ratio": 0.5,
+      "compression_num_bits": 6
+    },
+    {
+      "source_shard": 1,
+      "target_shard": 2,
+      "status": "delivered",
+      "delay_ms": 0,
+      "simulated_current_version": 3,
+      "staleness_multiplier": 1.0,
+      "compression_applied": true,
+      "compressed_values": 168,
+      "payload_wire_bytes": 466,
+      "dense_payload_wire_bytes": 1344,
+      "payload_wire_ratio": 0.34672619047619047,
+      "compression_topk_ratio": 0.5,
+      "compression_num_bits": 6
+    }
+  ],
+  "processes": [
+    {
+      "managed": false,
+      "pid": 26352,
+      "returncode": null,
+      "alive": true,
+      "version": 3,
+      "last_checkpoint_version": 3,
+      "checkpoint_versions": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "host": "127.0.0.1",
+      "port": 43221
+    },
+    {
+      "managed": false,
+      "pid": 27384,
+      "returncode": null,
+      "alive": true,
+      "version": 3,
+      "last_checkpoint_version": 3,
+      "checkpoint_versions": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "host": "127.0.0.1",
+      "port": 43222
+    },
+    {
+      "managed": false,
+      "pid": 27176,
+      "returncode": null,
+      "alive": true,
+      "version": 3,
+      "last_checkpoint_version": 3,
+      "checkpoint_versions": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "host": "127.0.0.1",
+      "port": 43223
+    }
+  ]
+}

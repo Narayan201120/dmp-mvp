@@ -1,7 +1,11 @@
 import asyncio
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import shutil
+import socket
+import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -11,7 +15,7 @@ from daemon.main import StaleBoundaryError
 from daemon.main import WindowCoordinator
 from daemon.messaging import MessageBus
 from daemon.node import Node
-from daemon.process_runtime import ProcessWindowRunner
+from daemon.process_runtime import ProcessWindowRunner, ProcessWorkerEndpoint
 from daemon.state import NodeState
 from experiments.process_window import run
 from sim.network import NetworkConfig
@@ -25,6 +29,43 @@ def _make_workspace_tmp_dir() -> Path:
     path = root / uuid4().hex
     path.mkdir()
     return path
+
+
+def _reserve_worker_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@contextmanager
+def _spawn_external_workers(num_workers: int) -> tuple[list[ProcessWorkerEndpoint], list[subprocess.Popen[bytes]]]:
+    endpoints = [ProcessWorkerEndpoint(host="127.0.0.1", port=_reserve_worker_port()) for _ in range(num_workers)]
+    processes: list[subprocess.Popen[bytes]] = []
+    try:
+        for endpoint in endpoints:
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "daemon.socket_worker",
+                        "--bind-host",
+                        endpoint.host,
+                        "--port",
+                        str(endpoint.port),
+                    ],
+                    cwd=str(Path.cwd()),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            )
+        yield endpoints, processes
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
 
 
 def _training_batch() -> torch.Tensor:
@@ -123,6 +164,56 @@ def test_process_window_training_matches_in_process_coordinator() -> None:
     assert all(status["version"] == 3 for status in statuses)
     assert all(status["last_checkpoint_version"] == 3 for status in statuses)
     assert all(status["checkpoint_versions"] == [0, 1, 2, 3] for status in statuses)
+
+
+def test_process_window_attaches_to_external_workers() -> None:
+    config = ToyTransformerConfig(
+        vocab_size=32,
+        max_seq_len=8,
+        d_model=16,
+        num_heads=4,
+        mlp_hidden_dim=32,
+        num_layers=6,
+    )
+    model = build_toy_transformer(config, seed=23)
+    process_shards, _ = build_transformer_shards(model, num_shards=3)
+    reference_shards, _ = build_transformer_shards(model, num_shards=3)
+    input_ids = torch.tensor(
+        [
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [8, 7, 6, 5, 4, 3, 2, 1],
+        ],
+        dtype=torch.long,
+    )
+    training_batch = _training_batch()
+
+    with torch.no_grad():
+        reference_logits = model(input_ids).to(dtype=torch.float32)
+
+    reference_result = asyncio.run(_build_reference_coordinator(reference_shards).train_window(training_batch, version=0))
+
+    with _spawn_external_workers(3) as (endpoints, processes):
+        with ProcessWindowRunner(
+            process_shards,
+            learning_rate=1e-2,
+            optimizer_name="adam",
+            snapshot_depth=8,
+            worker_endpoints=endpoints,
+            stop_workers_on_close=True,
+        ) as runner:
+            logits = runner.run_window(input_ids, version=0)
+            process_result = runner.train_window(training_batch, version=0)
+            statuses = runner.process_status()
+
+        for process in processes:
+            process.wait(timeout=10)
+
+    torch.testing.assert_close(logits, reference_logits, atol=1e-6, rtol=1e-6)
+    assert process_result.loss_before == reference_result.loss_before
+    assert process_result.loss_after == reference_result.loss_after
+    assert all(status["managed"] is False for status in statuses)
+    assert all(status["alive"] is True for status in statuses)
+    assert all(status["version"] == 1 for status in statuses)
 
 
 def test_process_window_experiment_writes_summary() -> None:
@@ -254,3 +345,101 @@ def test_process_window_partial_commit_failure_rolls_back_all_workers(monkeypatc
     assert recovered_result.loss_after == reference_result.loss_after
     assert all(status["version"] == 1 for status in recovered_statuses)
     assert all(status["checkpoint_versions"] == [0, 1] for status in recovered_statuses)
+
+
+def test_process_window_partial_commit_failure_at_later_version_rolls_back_to_last_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ToyTransformerConfig(
+        vocab_size=32,
+        max_seq_len=8,
+        d_model=16,
+        num_heads=4,
+        mlp_hidden_dim=32,
+        num_layers=6,
+    )
+    model = build_toy_transformer(config, seed=23)
+    process_shards, _ = build_transformer_shards(model, num_shards=3)
+    reference_shards, _ = build_transformer_shards(model, num_shards=3)
+    training_batch = _training_batch()
+
+    reference_coordinator = _build_reference_coordinator(reference_shards)
+    _ = asyncio.run(reference_coordinator.train_window(training_batch, version=0))
+    reference_result = asyncio.run(reference_coordinator.train_window(training_batch, version=1))
+
+    with ProcessWindowRunner(
+        process_shards,
+        learning_rate=1e-2,
+        optimizer_name="adam",
+        snapshot_depth=8,
+    ) as runner:
+        _ = runner.train_window(training_batch, version=0)
+        original_request_worker = ProcessWindowRunner._request_worker
+
+        def flaky_request_worker(self: ProcessWindowRunner, index: int, request: dict[str, object]) -> dict[str, object]:
+            if request["kind"] == "commit" and request["version"] == 1 and index == 1:
+                raise RuntimeError("synthetic later commit failure")
+            return original_request_worker(self, index, request)
+
+        monkeypatch.setattr(ProcessWindowRunner, "_request_worker", flaky_request_worker)
+        with pytest.raises(RuntimeError, match="synthetic later commit failure"):
+            runner.train_window(training_batch, version=1)
+        failed_statuses = runner.process_status()
+
+        monkeypatch.setattr(ProcessWindowRunner, "_request_worker", original_request_worker)
+        recovered_result = runner.train_window(training_batch, version=1)
+        recovered_statuses = runner.process_status()
+
+    assert all(status["version"] == 1 for status in failed_statuses)
+    assert all(status["checkpoint_versions"] == [0, 1] for status in failed_statuses)
+    assert recovered_result.loss_before == reference_result.loss_before
+    assert recovered_result.loss_after == reference_result.loss_after
+    assert all(status["version"] == 2 for status in recovered_statuses)
+    assert all(status["checkpoint_versions"] == [0, 1, 2] for status in recovered_statuses)
+
+
+def test_process_window_dead_worker_restarts_from_last_commit() -> None:
+    config = ToyTransformerConfig(
+        vocab_size=32,
+        max_seq_len=8,
+        d_model=16,
+        num_heads=4,
+        mlp_hidden_dim=32,
+        num_layers=6,
+    )
+    model = build_toy_transformer(config, seed=23)
+    process_shards, _ = build_transformer_shards(model, num_shards=3)
+    reference_shards, _ = build_transformer_shards(model, num_shards=3)
+    training_batch = _training_batch()
+
+    reference_coordinator = _build_reference_coordinator(reference_shards)
+    _ = asyncio.run(reference_coordinator.train_window(training_batch, version=0))
+    reference_result = asyncio.run(reference_coordinator.train_window(training_batch, version=1))
+
+    with ProcessWindowRunner(
+        process_shards,
+        learning_rate=1e-2,
+        optimizer_name="adam",
+        snapshot_depth=8,
+    ) as runner:
+        _ = runner.train_window(training_batch, version=0)
+        original_pid = int(runner.process_status()[1]["pid"])
+        runner._processes[1].terminate()
+        runner._processes[1].wait(timeout=runner.request_timeout_s)
+
+        with pytest.raises(RuntimeError, match="exited during request handling"):
+            runner.train_window(training_batch, version=1)
+        failed_statuses = runner.process_status()
+
+        recovered_result = runner.train_window(training_batch, version=1)
+        recovered_statuses = runner.process_status()
+
+    restarted_pid = int(recovered_statuses[1]["pid"])
+    assert int(failed_statuses[1]["pid"]) != original_pid
+    assert restarted_pid != original_pid
+    assert all(status["alive"] is True for status in failed_statuses)
+    assert all(status["version"] == 1 for status in failed_statuses)
+    assert all(status["alive"] is True for status in recovered_statuses)
+    assert recovered_result.loss_before == reference_result.loss_before
+    assert recovered_result.loss_after == reference_result.loss_after
+    assert all(status["version"] == 2 for status in recovered_statuses)

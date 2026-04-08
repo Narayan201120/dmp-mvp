@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import math
-import random
 import pickle
+import random
 import socket
 import subprocess
 import sys
@@ -62,6 +62,43 @@ class ProcessTrainWindowResult:
     loss_after: float
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessWorkerRecoveryState:
+    version: int
+    last_checkpoint_version: int
+    checkpoint_versions: tuple[int, ...]
+    model_snapshots: tuple[tuple[int, dict[str, np.ndarray]], ...]
+    optimizer_snapshots: tuple[tuple[int, bytes], ...]
+
+    def truncated(self, version: int) -> ProcessWorkerRecoveryState:
+        checkpoint_versions = tuple(value for value in self.checkpoint_versions if value <= version)
+        if not checkpoint_versions:
+            raise KeyError(f"no recovery snapshot exists for version {version}")
+        model_snapshots = tuple(
+            (snapshot_version, state)
+            for snapshot_version, state in self.model_snapshots
+            if snapshot_version <= version
+        )
+        optimizer_snapshots = tuple(
+            (snapshot_version, state)
+            for snapshot_version, state in self.optimizer_snapshots
+            if snapshot_version <= version
+        )
+        return ProcessWorkerRecoveryState(
+            version=version,
+            last_checkpoint_version=version,
+            checkpoint_versions=checkpoint_versions,
+            model_snapshots=model_snapshots,
+            optimizer_snapshots=optimizer_snapshots,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessWorkerEndpoint:
+    host: str
+    port: int
+
+
 @dataclass(slots=True)
 class ProcessWindowRunner:
     shards: list[TransformerShard]
@@ -80,9 +117,16 @@ class ProcessWindowRunner:
     startup_timeout_s: float = 10.0
     request_timeout_s: float = 10.0
     python_executable: str = sys.executable
+    worker_endpoints: list[ProcessWorkerEndpoint] | None = None
+    stop_workers_on_close: bool | None = None
     rng: random.Random = field(default_factory=random.Random, repr=False)
-    _ports: list[int] = field(init=False, repr=False, default_factory=list)
-    _processes: list[subprocess.Popen[bytes]] = field(init=False, repr=False, default_factory=list)
+    _worker_endpoints: list[ProcessWorkerEndpoint] = field(init=False, repr=False, default_factory=list)
+    _processes: list[subprocess.Popen[bytes] | None] = field(init=False, repr=False, default_factory=list)
+    _worker_recovery_states: list[ProcessWorkerRecoveryState | None] = field(
+        init=False,
+        repr=False,
+        default_factory=list,
+    )
     _last_boundary_events: list[dict[str, object]] = field(init=False, repr=False, default_factory=list)
     _started: bool = field(init=False, default=False, repr=False)
 
@@ -108,68 +152,70 @@ class ProcessWindowRunner:
                 "compression_error_feedback is not supported for boundary activations; "
                 "carry-over residuals across independent batches distort the signal"
             )
+        if self.worker_endpoints is not None and len(self.worker_endpoints) != len(self.shards):
+            raise ValueError("worker_endpoints must match the number of shards")
 
     def start(self) -> None:
         if self._started:
             return
 
-        self._ports = [_reserve_port() for _ in self.shards]
-        self._processes = []
+        if self.worker_endpoints is None:
+            self._worker_endpoints = [ProcessWorkerEndpoint(host="127.0.0.1", port=_reserve_port()) for _ in self.shards]
+            self._processes = []
+        else:
+            self._worker_endpoints = list(self.worker_endpoints)
+            self._processes = [None] * len(self.shards)
+
+        self._worker_recovery_states = [None] * len(self.shards)
         try:
-            for shard, port in zip(self.shards, self._ports):
-                process = subprocess.Popen(
-                    [
-                        self.python_executable,
-                        "-m",
-                        "daemon.socket_worker",
-                        "--port",
-                        str(port),
-                    ],
-                    cwd=str(PROJECT_ROOT),
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-                assert process.stdin is not None
-                pickle.dump(
-                    {
-                        "shard": shard,
-                        "learning_rate": self.learning_rate,
-                        "optimizer_name": self.optimizer_name,
-                        "weight_decay": self.weight_decay,
-                        "snapshot_depth": self.snapshot_depth,
-                    },
-                    process.stdin,
-                    protocol=pickle.HIGHEST_PROTOCOL,
-                )
-                process.stdin.close()
-                self._processes.append(process)
+            if self.worker_endpoints is None:
+                for index in range(len(self.shards)):
+                    self._processes.append(self._spawn_worker(index))
 
             self._wait_for_workers()
+
+            if self.worker_endpoints is not None:
+                for index in range(len(self.shards)):
+                    response = self._request_worker(
+                        index,
+                        {
+                            "kind": "configure",
+                            "config": self._worker_launch_config(index),
+                        },
+                    )
+                    if response["kind"] != "configured":
+                        raise RuntimeError(f"worker {index} did not accept configuration")
+
             self._started = True
+            self._refresh_worker_recovery_states()
         except Exception:
             self._terminate_processes()
-            self._ports = []
+            self._worker_endpoints = []
             self._processes = []
+            self._worker_recovery_states = []
             raise
 
     def close(self) -> None:
         if not self._started and not self._processes:
             return
 
-        for port, process in zip(self._ports, self._processes):
-            if process.poll() is not None:
-                continue
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=self.request_timeout_s) as sock:
-                    send_message(sock, {"kind": "stop"})
-            except OSError:
-                continue
+        stop_workers = self.stop_workers_on_close
+        if stop_workers is None:
+            stop_workers = self.worker_endpoints is None
+
+        if stop_workers:
+            for index, process in enumerate(self._processes):
+                if process is not None and process.poll() is not None:
+                    continue
+                try:
+                    self._send_one_way(index, {"kind": "stop"})
+                except RuntimeError:
+                    continue
 
         self._terminate_processes()
-
-        self._ports = []
+        self._worker_endpoints = []
         self._processes = []
+        self._worker_recovery_states = []
         self._started = False
 
     def run_window(self, input_ids: torch.Tensor, *, version: int) -> torch.Tensor:
@@ -183,7 +229,7 @@ class ProcessWindowRunner:
             "version": int(version),
             "tensor": input_ids.detach().to(device="cpu", dtype=torch.long).numpy(),
         }
-        for index in range(len(self._ports)):
+        for index in range(len(self._worker_endpoints)):
             message = self._request_worker(
                 index,
                 {
@@ -192,7 +238,7 @@ class ProcessWindowRunner:
                     "tensor": message["tensor"],
                 },
             )
-            if index < len(self._ports) - 1:
+            if index < len(self._worker_endpoints) - 1:
                 message = self._apply_boundary_effects(message, version=version, edge=(index, index + 1))
 
         if message["kind"] != "logits":
@@ -210,15 +256,15 @@ class ProcessWindowRunner:
 
     def train_window(self, input_ids: torch.Tensor, *, version: int) -> ProcessTrainWindowResult:
         model_inputs, targets = split_next_token_batch(input_ids)
-        loss_before = self.evaluate_next_token_loss(input_ids, version=version)
-        self._last_boundary_events = []
 
         try:
+            loss_before = self.evaluate_next_token_loss(input_ids, version=version)
+            self._last_boundary_events = []
             message: dict[str, Any] = {
                 "version": int(version),
                 "tensor": model_inputs.detach().to(device="cpu", dtype=torch.long).numpy(),
             }
-            for index in range(len(self._ports)):
+            for index in range(len(self._worker_endpoints)):
                 message = self._request_worker(
                     index,
                     {
@@ -227,11 +273,11 @@ class ProcessWindowRunner:
                         "tensor": message["tensor"],
                     },
                 )
-                if index < len(self._ports) - 1:
+                if index < len(self._worker_endpoints) - 1:
                     message = self._apply_boundary_effects(message, version=version, edge=(index, index + 1))
 
             backward_message = self._request_worker(
-                len(self._ports) - 1,
+                len(self._worker_endpoints) - 1,
                 {
                     "kind": "backward_loss",
                     "version": int(version),
@@ -241,7 +287,7 @@ class ProcessWindowRunner:
             if backward_message["kind"] != "backward_grad":
                 raise RuntimeError("last worker did not return a backward gradient message")
 
-            for index in range(len(self._ports) - 2, -1, -1):
+            for index in range(len(self._worker_endpoints) - 2, -1, -1):
                 backward_message = self._request_worker(
                     index,
                     {
@@ -253,7 +299,7 @@ class ProcessWindowRunner:
                 if backward_message["kind"] != "backward_grad":
                     raise RuntimeError(f"worker {index} did not return a backward gradient message")
 
-            for index in range(len(self._ports)):
+            for index in range(len(self._worker_endpoints)):
                 response = self._request_worker(
                     index,
                     {
@@ -267,31 +313,36 @@ class ProcessWindowRunner:
             self._rollback_to_version(version)
             raise
 
+        self._refresh_worker_recovery_states()
         loss_after = self.evaluate_next_token_loss(input_ids, version=version + 1)
         return ProcessTrainWindowResult(version=version, loss_before=loss_before, loss_after=loss_after)
 
     def process_status(self) -> list[dict[str, object]]:
         if not self._started:
             return []
+
         statuses: list[dict[str, object]] = []
         for index, process in enumerate(self._processes):
             status: dict[str, object] = {
-                "pid": process.pid,
-                "returncode": process.poll(),
-                "alive": process.poll() is None,
+                "managed": process is not None,
+                "pid": process.pid if process is not None else None,
+                "returncode": process.poll() if process is not None else None,
+                "alive": process.poll() is None if process is not None else True,
             }
-            if process.poll() is None:
-                try:
-                    runtime_status = self._request_worker(index, {"kind": "status"})
-                    status.update(
-                        {
-                            "version": int(runtime_status["version"]),
-                            "last_checkpoint_version": int(runtime_status["last_checkpoint_version"]),
-                            "checkpoint_versions": [int(value) for value in runtime_status["checkpoint_versions"]],
-                        }
-                    )
-                except RuntimeError:
-                    pass
+            try:
+                runtime_status = self._request_worker(index, {"kind": "status"})
+                status.update(
+                    {
+                        "pid": int(runtime_status["pid"]),
+                        "version": int(runtime_status["version"]),
+                        "last_checkpoint_version": int(runtime_status["last_checkpoint_version"]),
+                        "checkpoint_versions": [int(value) for value in runtime_status["checkpoint_versions"]],
+                        "host": str(runtime_status["host"]),
+                        "port": int(runtime_status["port"]),
+                    }
+                )
+            except RuntimeError:
+                status["alive"] = False
             statuses.append(status)
         return statuses
 
@@ -299,23 +350,28 @@ class ProcessWindowRunner:
         return [dict(event) for event in self._last_boundary_events]
 
     def _request_worker(self, index: int, request: dict[str, Any]) -> dict[str, Any]:
-        port = self._ports[index]
+        endpoint = self._worker_endpoints[index]
         process = self._processes[index]
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=self.request_timeout_s) as sock:
+            with socket.create_connection((endpoint.host, endpoint.port), timeout=self.request_timeout_s) as sock:
                 send_message(sock, request)
                 return recv_message(sock)
         except (OSError, RuntimeError) as exc:
-            if process.poll() is not None:
+            if process is not None and process.poll() is not None:
                 raise RuntimeError(
-                    f"worker for port {port} exited during request handling with code {process.returncode}: "
+                    f"worker for {endpoint.host}:{endpoint.port} exited during request handling with code {process.returncode}: "
                     f"{self._read_process_stderr(process)}"
                 ) from exc
-            raise RuntimeError(f"worker for port {port} closed the request unexpectedly") from exc
+            raise RuntimeError(f"worker for {endpoint.host}:{endpoint.port} closed the request unexpectedly") from exc
+
+    def _send_one_way(self, index: int, request: dict[str, Any]) -> None:
+        endpoint = self._worker_endpoints[index]
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=self.request_timeout_s) as sock:
+            send_message(sock, request)
 
     def _abort_window(self, version: int) -> None:
         for index, process in enumerate(self._processes):
-            if process.poll() is not None:
+            if process is not None and process.poll() is not None:
                 continue
             try:
                 self._request_worker(
@@ -331,7 +387,8 @@ class ProcessWindowRunner:
     def _rollback_to_version(self, version: int) -> None:
         self._abort_window(version)
         for index, process in enumerate(self._processes):
-            if process.poll() is not None:
+            if process is not None and process.poll() is not None:
+                self._restart_worker(index, version=version)
                 continue
             try:
                 self._request_worker(
@@ -342,7 +399,9 @@ class ProcessWindowRunner:
                     },
                 )
             except RuntimeError:
-                continue
+                if process is not None and process.poll() is not None:
+                    self._restart_worker(index, version=version)
+        self._refresh_worker_recovery_states()
 
     def _apply_boundary_effects(
         self,
@@ -435,35 +494,132 @@ class ProcessWindowRunner:
 
     def _wait_for_workers(self) -> None:
         deadline = time.time() + self.startup_timeout_s
-        pending = set(self._ports)
+        pending = set(range(len(self._worker_endpoints)))
         while pending:
-            for port, process in zip(self._ports, self._processes):
-                if process.poll() is None:
-                    continue
-                raise RuntimeError(
-                    f"worker for port {port} exited during startup with code {process.returncode}: "
-                    f"{self._read_process_stderr(process)}"
-                )
+            for index in tuple(pending):
+                process = self._processes[index]
+                endpoint = self._worker_endpoints[index]
+                if process is not None and process.poll() is not None:
+                    raise RuntimeError(
+                        f"worker for {endpoint.host}:{endpoint.port} exited during startup with code {process.returncode}: "
+                        f"{self._read_process_stderr(process)}"
+                    )
 
-            if time.time() >= deadline:
-                raise TimeoutError("timed out waiting for worker processes to open their ports")
-
-            ready: set[int] = set()
-            for port in pending:
                 try:
-                    with socket.create_connection(("127.0.0.1", port), timeout=0.2) as sock:
+                    with socket.create_connection((endpoint.host, endpoint.port), timeout=0.2) as sock:
                         send_message(sock, {"kind": "ping"})
                         response = recv_message(sock)
                     if response.get("kind") == "ready":
-                        ready.add(port)
+                        pending.discard(index)
                 except (OSError, RuntimeError):
                     continue
-            pending.difference_update(ready)
-            if pending:
-                time.sleep(0.05)
+
+            if not pending:
+                break
+            if time.time() >= deadline:
+                raise TimeoutError("timed out waiting for worker processes to open their ports")
+            time.sleep(0.05)
+
+    def _spawn_worker(
+        self,
+        index: int,
+        *,
+        recovery_state: ProcessWorkerRecoveryState | None = None,
+    ) -> subprocess.Popen[bytes]:
+        endpoint = self._worker_endpoints[index]
+        process = subprocess.Popen(
+            [
+                self.python_executable,
+                "-m",
+                "daemon.socket_worker",
+                "--bind-host",
+                endpoint.host,
+                "--port",
+                str(endpoint.port),
+            ],
+            cwd=str(PROJECT_ROOT),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdin is not None
+        pickle.dump(
+            self._worker_launch_config(index, recovery_state=recovery_state),
+            process.stdin,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        process.stdin.close()
+        return process
+
+    def _worker_launch_config(
+        self,
+        index: int,
+        *,
+        recovery_state: ProcessWorkerRecoveryState | None = None,
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = {
+            "shard": self.shards[index],
+            "learning_rate": self.learning_rate,
+            "optimizer_name": self.optimizer_name,
+            "weight_decay": self.weight_decay,
+            "snapshot_depth": self.snapshot_depth,
+        }
+        if recovery_state is not None:
+            config.update(
+                {
+                    "current_version": recovery_state.version,
+                    "last_checkpoint_version": recovery_state.last_checkpoint_version,
+                    "checkpoint_versions": list(recovery_state.checkpoint_versions),
+                    "model_snapshots": list(recovery_state.model_snapshots),
+                    "optimizer_snapshots": list(recovery_state.optimizer_snapshots),
+                }
+            )
+        return config
+
+    def _restart_worker(self, index: int, *, version: int) -> None:
+        process = self._processes[index]
+        if process is None:
+            endpoint = self._worker_endpoints[index]
+            raise RuntimeError(
+                f"externally managed worker {endpoint.host}:{endpoint.port} exited and cannot be restarted by the runner"
+            )
+        recovery_state = self._worker_recovery_states[index]
+        if recovery_state is None:
+            raise RuntimeError(f"worker {index} exited without a committed recovery snapshot")
+        restarted = self._spawn_worker(index, recovery_state=recovery_state.truncated(version))
+        self._processes[index] = restarted
+        self._wait_for_workers()
+
+    def _refresh_worker_recovery_states(self) -> None:
+        if not self._started and not self._processes:
+            return
+        refreshed_states = list(self._worker_recovery_states)
+        for index, process in enumerate(self._processes):
+            if process is not None and process.poll() is not None:
+                continue
+            try:
+                export = self._request_worker(index, {"kind": "export_state"})
+            except RuntimeError:
+                continue
+            refreshed_states[index] = ProcessWorkerRecoveryState(
+                version=int(export["version"]),
+                last_checkpoint_version=int(export["last_checkpoint_version"]),
+                checkpoint_versions=tuple(int(value) for value in export["checkpoint_versions"]),
+                model_snapshots=tuple(
+                    (int(snapshot_version), state)
+                    for snapshot_version, state in export["model_snapshots"]
+                ),
+                optimizer_snapshots=tuple(
+                    (int(snapshot_version), bytes(snapshot_state))
+                    for snapshot_version, snapshot_state in export["optimizer_snapshots"]
+                ),
+            )
+        self._worker_recovery_states = refreshed_states
 
     def _terminate_processes(self) -> None:
         for process in self._processes:
+            if process is None:
+                continue
             try:
                 process.wait(timeout=self.request_timeout_s)
             except subprocess.TimeoutExpired:

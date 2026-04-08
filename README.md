@@ -19,7 +19,7 @@ The current implementation is intentionally narrower than the full design docume
 - toy transformer implemented
 - shard equivalence proven
 - single-window runtime path verified
-- test suite passing (`33 passed`)
+- test suite passing (`36 passed`)
 - eval artifact locked
 - centralized baseline runner implemented
 - first frozen baseline run completed
@@ -37,10 +37,14 @@ The current implementation is intentionally narrower than the full design docume
 - `top50/4-bit` versus `top50/6-bit` combined-delay comparison is complete, and the gap stays small once staleness becomes the dominant source of damage
 - exact sparse payload byte reporting is now wired into the experiment summaries
 - current byte-aware recommendation: `top50/4-bit` for better quality per byte, `top50/6-bit` for a slightly safer quality margin under jitter
+- hardware-facing default has now moved to `top50/6-bit`, because the first external-worker attach path should bias toward transport robustness over the last `42` payload bytes
 - first multi-process shard smoke now reproduces forward logits, repeated train steps, and checkpoint/version advancement exactly across separate localhost worker processes
 - the process runtime now also supports delay, staleness decay, and compression on the real worker handoff path
 - the process runtime now rolls all workers back to the last consistent checkpoint after a partial commit failure
+- the process runtime can now relaunch a dead worker from the last committed checkpoint and retry the interrupted step cleanly
+- the process runtime can now attach to externally hosted shard workers over TCP instead of assuming the parent owns every worker process
 - first process-side comparison sweep is complete at the `top50/4-bit` operating point, and the degradation ordering matches the simulator (`compression-only < 1 ms decay < 2 ms decay`)
+- process-side `top50/4-bit` versus `top50/6-bit` comparator is now complete, and `6-bit` keeps the safer quality margin once jitter/reordering enters the path
 
 ## Current Test Command
 
@@ -99,8 +103,10 @@ Use the new process path as the bridge out of pure simulation, now that it cover
   - `experiments/distributed_combined_top50_4bit_decay_jitter_reorder_summary.json`
 - first multi-process smoke artifact:
   - `experiments/process_window_summary.json`
+- first external-worker smoke artifact:
+  - `experiments/process_window_external_top50_6bit_summary.json`
 - diagnostic-only unsupported EF artifacts:
   - `experiments/distributed_compression_top25_8bit_ef_summary.json`
   - `experiments/distributed_compression_top10_4bit_ef_summary.json`
 
-The next implementation step is not another simulator sweep. It is expanding the now-transactional process runtime from the first `top50/4-bit` comparison points into a broader process-side matrix and then broadening rollback coverage beyond the synthetic partial-commit case.
+The next implementation step is not another simulator sweep. It is carrying the now recovery-capable, external-worker process runtime from localhost into the first real LAN multi-machine smoke at the `top50/6-bit` operating point.
