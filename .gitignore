@@ -1,11 +1,8 @@
-DMP_Final_Project_Document.docx
-folder_tree.txt
-folder_tree_updated.txt
-PHASE1_EXECUTION_PLAN.md
-PROGRESS.md
-
+# Python compiled files
 __pycache__/
-.pytest_cache/
-pytest-cache-files-*/
-tests_runtime_tmp/
-dmp_process_runtime_*/
+*.pyc
+
+# Environment and IDE (common defaults)
+.env
+.vscode/
+.idea/

@@ -61,19 +61,29 @@ def _rebuild_shard(spec_dict: dict[str, int], state_dict: dict[str, object]) -> 
         end_layer=int(spec_dict["end_layer"]),
     )
     num_blocks = spec.end_layer - spec.start_layer
-    d_model = int(state_dict["blocks.0.attn_norm.weight"].shape[0])  # type: ignore[union-attr]
-    mlp_hidden_dim = int(state_dict["blocks.0.mlp.0.weight"].shape[0])  # type: ignore[union-attr]
-    if "token_embedding.weight" in state_dict:
+    # Structural hyperparameters (num_heads, max_seq_len, vocab_size) are not
+    # recoverable from tensor shapes alone -- nn.MultiheadAttention stores
+    # in_proj_weight as [3*embed_dim, embed_dim]. Prefer explicit values from
+    # the plain-data configure payload; fall back to shape-based inference or
+    # ToyTransformerConfig defaults for legacy payloads.
+    num_heads = int(spec_dict.get("num_heads", 4))
+    max_seq_len = int(
+        spec_dict.get("max_seq_len")
+        or (state_dict["position_embedding.weight"].shape[0] if "position_embedding.weight" in state_dict else 16)
+    )
+    if "vocab_size" in spec_dict:
+        vocab_size = int(spec_dict["vocab_size"])
+    elif "token_embedding.weight" in state_dict:
         vocab_size = int(state_dict["token_embedding.weight"].shape[0])  # type: ignore[union-attr]
-        max_seq_len = int(state_dict["position_embedding.weight"].shape[0])  # type: ignore[union-attr]
     else:
         vocab_size = int(state_dict["lm_head.weight"].shape[0])  # type: ignore[union-attr]
-        max_seq_len = 16
+    d_model = int(state_dict["blocks.0.attn_norm.weight"].shape[0])  # type: ignore[union-attr]
+    mlp_hidden_dim = int(state_dict["blocks.0.mlp.0.weight"].shape[0])  # type: ignore[union-attr]
     config = ToyTransformerConfig(
         vocab_size=vocab_size,
         max_seq_len=max_seq_len,
         d_model=d_model,
-        num_heads=4,
+        num_heads=num_heads,
         mlp_hidden_dim=mlp_hidden_dim,
         num_layers=num_blocks,
     )

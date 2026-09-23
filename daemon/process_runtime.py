@@ -16,6 +16,7 @@ import torch
 
 from daemon.main import BoundaryDeliveryError, StaleBoundaryError
 from sim.network import NetworkConfig, sample_delivery_delay
+from training.checkpoints import module_state_to_numpy
 from training.compression import (
     compress_boundary_payload,
     compressed_payload_wire_bytes,
@@ -23,6 +24,7 @@ from training.compression import (
     dense_payload_wire_bytes,
 )
 from training.metrics import next_token_loss, split_next_token_batch
+from training.model_factory import ToyTransformerConfig
 from training.shard import TransformerShard
 from training.staleness import decay_weight, should_drop
 
@@ -137,6 +139,7 @@ class ProcessWindowRunner:
     python_executable: str = sys.executable
     bind_host: str = "127.0.0.1"
     measure_transport_latency: bool = False
+    shard_specs: list[dict[str, int]] | None = None
     worker_endpoints: list[ProcessWorkerEndpoint] | None = None
     stop_workers_on_close: bool | None = None
     rng: random.Random = field(default_factory=random.Random, repr=False)
@@ -204,7 +207,7 @@ class ProcessWindowRunner:
                         index,
                         {
                             "kind": "configure",
-                            "config": self._worker_launch_config(index),
+                            "config": self._worker_launch_config(index, plain_data=True),
                         },
                     )
                     if response["kind"] != "configured":
@@ -615,14 +618,41 @@ class ProcessWindowRunner:
         index: int,
         *,
         recovery_state: ProcessWorkerRecoveryState | None = None,
+        plain_data: bool = False,
+        shard_spec: dict[str, int] | None = None,
     ) -> dict[str, Any]:
+        shard = self.shards[index]
         config: dict[str, Any] = {
-            "shard": self.shards[index],
             "learning_rate": self.learning_rate,
             "optimizer_name": self.optimizer_name,
             "weight_decay": self.weight_decay,
             "snapshot_depth": self.snapshot_depth,
         }
+        if plain_data:
+            # Socket configure path (external workers): carry only picklable
+            # plain data so the worker rebuilds the shard itself over the
+            # socket instead of requiring a coordinator-spawned process.
+            if shard_spec is not None:
+                config["shard_spec"] = dict(shard_spec)
+            else:
+                first_block = next(shard.blocks.children(), None) if len(shard.blocks) > 0 else None
+                num_heads = (
+                    int(first_block.attention.attention.num_heads)
+                    if first_block is not None
+                    else int(ToyTransformerConfig().num_heads)
+                )
+                config["shard_spec"] = {
+                    "shard_id": int(shard.spec.shard_id),
+                    "start_layer": int(shard.spec.start_layer),
+                    "end_layer": int(shard.spec.end_layer),
+                    "num_heads": num_heads,
+                    "max_seq_len": int(ToyTransformerConfig().max_seq_len),
+                    "vocab_size": int(ToyTransformerConfig().vocab_size),
+                }
+            config["shard_state"] = module_state_to_numpy(shard)
+        else:
+            # Stdin launch path (managed workers): pickle the live module.
+            config["shard"] = shard
         if recovery_state is not None:
             config.update(
                 {
