@@ -16,6 +16,7 @@ import torch
 
 from daemon.main import BoundaryDeliveryError, StaleBoundaryError
 from sim.network import NetworkConfig, sample_delivery_delay
+from training.checkpoints import module_state_to_numpy
 from training.compression import (
     compress_boundary_payload,
     compressed_payload_wire_bytes,
@@ -23,6 +24,7 @@ from training.compression import (
     dense_payload_wire_bytes,
 )
 from training.metrics import next_token_loss, split_next_token_batch
+from training.model_factory import ToyTransformerConfig
 from training.shard import TransformerShard
 from training.staleness import decay_weight, should_drop
 
@@ -49,10 +51,28 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
     return bytes(chunks)
 
 
-def _reserve_port() -> int:
+def _reserve_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind((host, 0))
         return int(sock.getsockname()[1])
+
+
+def detect_lan_host() -> str:
+    """Return the local machine's routable (non-loopback) IPv4 address.
+
+    Uses the standard connect-a-UDP-socket trick: no packets are sent, but the
+    kernel selects the source address that would be used for the route.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.settimeout(0.5)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            host = str(probe.getsockname()[0])
+        except OSError:
+            host = socket.gethostbyname(socket.gethostname())
+    if not host or host.startswith("127."):
+        raise RuntimeError(f"could not detect a non-loopback LAN address (got {host!r})")
+    return host
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +137,9 @@ class ProcessWindowRunner:
     startup_timeout_s: float = 10.0
     request_timeout_s: float = 10.0
     python_executable: str = sys.executable
+    bind_host: str = "127.0.0.1"
+    measure_transport_latency: bool = False
+    shard_specs: list[dict[str, int]] | None = None
     worker_endpoints: list[ProcessWorkerEndpoint] | None = None
     stop_workers_on_close: bool | None = None
     rng: random.Random = field(default_factory=random.Random, repr=False)
@@ -128,6 +151,7 @@ class ProcessWindowRunner:
         default_factory=list,
     )
     _last_boundary_events: list[dict[str, object]] = field(init=False, repr=False, default_factory=list)
+    _transport_samples: list[dict[str, object]] = field(init=False, repr=False, default_factory=list)
     _started: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -160,7 +184,10 @@ class ProcessWindowRunner:
             return
 
         if self.worker_endpoints is None:
-            self._worker_endpoints = [ProcessWorkerEndpoint(host="127.0.0.1", port=_reserve_port()) for _ in self.shards]
+            self._worker_endpoints = [
+                ProcessWorkerEndpoint(host=self.bind_host, port=_reserve_port(self.bind_host))
+                for _ in self.shards
+            ]
             self._processes = []
         else:
             self._worker_endpoints = list(self.worker_endpoints)
@@ -180,7 +207,7 @@ class ProcessWindowRunner:
                         index,
                         {
                             "kind": "configure",
-                            "config": self._worker_launch_config(index),
+                            "config": self._worker_launch_config(index, plain_data=True),
                         },
                     )
                     if response["kind"] != "configured":
@@ -216,6 +243,7 @@ class ProcessWindowRunner:
         self._worker_endpoints = []
         self._processes = []
         self._worker_recovery_states = []
+        self._transport_samples = []
         self._started = False
 
     def run_window(self, input_ids: torch.Tensor, *, version: int) -> torch.Tensor:
@@ -225,6 +253,7 @@ class ProcessWindowRunner:
             self.start()
 
         self._last_boundary_events = []
+        self._transport_samples = []
         message: dict[str, Any] = {
             "version": int(version),
             "tensor": input_ids.detach().to(device="cpu", dtype=torch.long).numpy(),
@@ -260,6 +289,7 @@ class ProcessWindowRunner:
         try:
             loss_before = self.evaluate_next_token_loss(input_ids, version=version)
             self._last_boundary_events = []
+            self._transport_samples = []
             message: dict[str, Any] = {
                 "version": int(version),
                 "tensor": model_inputs.detach().to(device="cpu", dtype=torch.long).numpy(),
@@ -349,14 +379,46 @@ class ProcessWindowRunner:
     def last_boundary_events(self) -> list[dict[str, object]]:
         return [dict(event) for event in self._last_boundary_events]
 
+    def transport_samples(self) -> list[dict[str, object]]:
+        """Measured TCP round-trip samples (ms) collected during the run.
+
+        Only populated when ``measure_transport_latency`` is enabled; these are
+        *real* transport observations used by LAN smokes to sanity-check that
+        the simulated impairment budget matches the actual path characteristics.
+        """
+        return [dict(sample) for sample in self._transport_samples]
+
     def _request_worker(self, index: int, request: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._worker_endpoints[index]
         process = self._processes[index]
+        measured = self.measure_transport_latency
+        started = time.perf_counter() if measured else 0.0
         try:
             with socket.create_connection((endpoint.host, endpoint.port), timeout=self.request_timeout_s) as sock:
+                connect_ms = (time.perf_counter() - started) * 1000.0 if measured else 0.0
                 send_message(sock, request)
-                return recv_message(sock)
+                response = recv_message(sock)
+            if measured:
+                self._transport_samples.append(
+                    {
+                        "kind": str(request.get("kind", "unknown")),
+                        "edge_host": f"{endpoint.host}:{endpoint.port}",
+                        "connect_ms": connect_ms,
+                        "roundtrip_ms": (time.perf_counter() - started) * 1000.0,
+                    }
+                )
+            return response
         except (OSError, RuntimeError) as exc:
+            if measured:
+                self._transport_samples.append(
+                    {
+                        "kind": str(request.get("kind", "unknown")),
+                        "edge_host": f"{endpoint.host}:{endpoint.port}",
+                        "connect_ms": None,
+                        "roundtrip_ms": None,
+                        "error": type(exc).__name__,
+                    }
+                )
             if process is not None and process.poll() is not None:
                 raise RuntimeError(
                     f"worker for {endpoint.host}:{endpoint.port} exited during request handling with code {process.returncode}: "
@@ -556,14 +618,41 @@ class ProcessWindowRunner:
         index: int,
         *,
         recovery_state: ProcessWorkerRecoveryState | None = None,
+        plain_data: bool = False,
+        shard_spec: dict[str, int] | None = None,
     ) -> dict[str, Any]:
+        shard = self.shards[index]
         config: dict[str, Any] = {
-            "shard": self.shards[index],
             "learning_rate": self.learning_rate,
             "optimizer_name": self.optimizer_name,
             "weight_decay": self.weight_decay,
             "snapshot_depth": self.snapshot_depth,
         }
+        if plain_data:
+            # Socket configure path (external workers): carry only picklable
+            # plain data so the worker rebuilds the shard itself over the
+            # socket instead of requiring a coordinator-spawned process.
+            if shard_spec is not None:
+                config["shard_spec"] = dict(shard_spec)
+            else:
+                first_block = next(shard.blocks.children(), None) if len(shard.blocks) > 0 else None
+                num_heads = (
+                    int(first_block.attention.attention.num_heads)
+                    if first_block is not None
+                    else int(ToyTransformerConfig().num_heads)
+                )
+                config["shard_spec"] = {
+                    "shard_id": int(shard.spec.shard_id),
+                    "start_layer": int(shard.spec.start_layer),
+                    "end_layer": int(shard.spec.end_layer),
+                    "num_heads": num_heads,
+                    "max_seq_len": int(ToyTransformerConfig().max_seq_len),
+                    "vocab_size": int(ToyTransformerConfig().vocab_size),
+                }
+            config["shard_state"] = module_state_to_numpy(shard)
+        else:
+            # Stdin launch path (managed workers): pickle the live module.
+            config["shard"] = shard
         if recovery_state is not None:
             config.update(
                 {

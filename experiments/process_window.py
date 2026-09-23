@@ -168,6 +168,19 @@ def run(
         mlp_hidden_dim=32,
         num_layers=6,
     )
+
+    def _shard_spec(shard) -> dict[str, int]:
+        first_block = next(shard.blocks.children(), None) if len(shard.blocks) > 0 else None
+        num_heads = int(first_block.attention.attention.num_heads) if first_block is not None else config.num_heads
+        return {
+            "shard_id": int(shard.spec.shard_id),
+            "start_layer": int(shard.spec.start_layer),
+            "end_layer": int(shard.spec.end_layer),
+            "num_heads": num_heads,
+            "max_seq_len": int(config.max_seq_len),
+            "vocab_size": int(config.vocab_size),
+        }
+
     model = build_toy_transformer(config, seed=23)
     process_shards, _ = build_transformer_shards(model, num_shards=num_shards)
     reference_shards, _ = build_transformer_shards(model, num_shards=num_shards)

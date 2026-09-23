@@ -19,6 +19,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from daemon.process_runtime import recv_message, send_message
 from training.checkpoints import SnapshotStore, module_state_to_numpy, numpy_state_to_module
 from training.metrics import next_token_loss
+from training.model_factory import ToyTransformerBlock, ToyTransformerConfig
+from training.shard import ShardSpec, TransformerShard
+import torch.nn as nn
 
 
 @dataclass(slots=True)
@@ -42,6 +45,65 @@ def _build_optimizer(
     raise ValueError(f"unsupported optimizer_name: {optimizer_name}")
 
 
+def _rebuild_shard(spec_dict: dict[str, int], state_dict: dict[str, object]) -> TransformerShard:
+    """Reconstruct a TransformerShard from plain-data spec + numpy state dict.
+
+    This lets external workers receive their shard assignment over the socket
+    ``configure`` message (which must carry only picklable plain data), instead
+    of requiring the full nn.Module to be pickled through stdin at spawn time.
+    The rebuilt shard is numerically identical to build_transformer_shards'
+    output because module_state_to_numpy/numpy_state_to_module round-trip every
+    parameter and buffer.
+    """
+    spec = ShardSpec(
+        shard_id=int(spec_dict["shard_id"]),
+        start_layer=int(spec_dict["start_layer"]),
+        end_layer=int(spec_dict["end_layer"]),
+    )
+    num_blocks = spec.end_layer - spec.start_layer
+    # Structural hyperparameters (num_heads, max_seq_len, vocab_size) are not
+    # recoverable from tensor shapes alone -- nn.MultiheadAttention stores
+    # in_proj_weight as [3*embed_dim, embed_dim]. Prefer explicit values from
+    # the plain-data configure payload; fall back to shape-based inference or
+    # ToyTransformerConfig defaults for legacy payloads.
+    num_heads = int(spec_dict.get("num_heads", 4))
+    max_seq_len = int(
+        spec_dict.get("max_seq_len")
+        or (state_dict["position_embedding.weight"].shape[0] if "position_embedding.weight" in state_dict else 16)
+    )
+    if "vocab_size" in spec_dict:
+        vocab_size = int(spec_dict["vocab_size"])
+    elif "token_embedding.weight" in state_dict:
+        vocab_size = int(state_dict["token_embedding.weight"].shape[0])  # type: ignore[union-attr]
+    else:
+        vocab_size = int(state_dict["lm_head.weight"].shape[0])  # type: ignore[union-attr]
+    d_model = int(state_dict["blocks.0.attn_norm.weight"].shape[0])  # type: ignore[union-attr]
+    mlp_hidden_dim = int(state_dict["blocks.0.mlp.0.weight"].shape[0])  # type: ignore[union-attr]
+    config = ToyTransformerConfig(
+        vocab_size=vocab_size,
+        max_seq_len=max_seq_len,
+        d_model=d_model,
+        num_heads=num_heads,
+        mlp_hidden_dim=mlp_hidden_dim,
+        num_layers=num_blocks,
+    )
+    blocks = [ToyTransformerBlock(config) for _ in range(num_blocks)]
+    token_embedding = nn.Embedding(vocab_size, d_model) if "token_embedding.weight" in state_dict else None
+    position_embedding = nn.Embedding(max_seq_len, d_model) if "position_embedding.weight" in state_dict else None
+    final_norm = nn.LayerNorm(d_model) if "final_norm.weight" in state_dict else None
+    lm_head = nn.Linear(d_model, vocab_size, bias=False) if "lm_head.weight" in state_dict else None
+    shard = TransformerShard(
+        spec=spec,
+        blocks=blocks,
+        token_embedding=token_embedding,
+        position_embedding=position_embedding,
+        final_norm=final_norm,
+        lm_head=lm_head,
+    )
+    numpy_state_to_module(shard, {str(key): value for key, value in state_dict.items()})
+    return shard
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a shard worker that serves forward requests over TCP.")
     parser.add_argument("--bind-host", default="127.0.0.1")
@@ -57,7 +119,16 @@ def _read_launch_config_from_stdin() -> dict[str, object] | None:
 
 
 def _initialize_runtime_state(launch_config: dict[str, object]) -> dict[str, object]:
-    shard = launch_config["shard"]
+    if "shard" in launch_config:
+        shard = launch_config["shard"]
+    else:
+        # External-worker path: the shard arrives as plain data (spec + numpy
+        # state) over the socket configure message so workers never need to be
+        # spawned by the coordinator.
+        shard = _rebuild_shard(
+            dict(launch_config["shard_spec"]),  # type: ignore[arg-type]
+            dict(launch_config["shard_state"]),  # type: ignore[arg-type]
+        )
     snapshot_depth = int(launch_config["snapshot_depth"])
     optimizer = _build_optimizer(
         shard,
